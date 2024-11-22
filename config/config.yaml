@@ -1,0 +1,37 @@
+data:
+  provider: "binance"
+  update_interval: 300 # 5 minutes
+  cache_duration: 3600 # 1 hour
+
+detectors:
+  dump:
+    volume_threshold: 3.0
+    price_threshold: -0.02
+    rsi_threshold: 30
+    min_score: 70
+    alert_cooldown: 3600
+    min_volume: 1000000
+    intervals: ["5m", "15m", "1h"]
+
+  pump:
+    volume_threshold: 3.0
+    price_threshold: 0.02
+    rsi_threshold: 70
+    min_score: 70
+    alert_cooldown: 3600
+    min_volume: 1000000
+    intervals: ["5m", "15m", "1h"]
+
+strategies:
+  sma:
+    short_window: 20
+    long_window: 50
+
+backtesting:
+  initial_capital: 10000
+  commission: 0.001
+  slippage: 0.001
+
+logging:
+  level: "INFO"
+  file_path: "logs/crypto_mar"
