@@ -2,6 +2,7 @@ from src.strategies.base_strategy import BaseStrategy
 import pandas as pd
 import numpy as np
 from src.utils.logger import setup_logger
+from src.types.trading_signals import TradingSignal
 
 class DumpStrategy(BaseStrategy):
     def __init__(
@@ -30,7 +31,7 @@ class DumpStrategy(BaseStrategy):
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         """Generate trading signals based on dump detection"""
         try:
-            signals = pd.Series(0, index=data.index)
+            signals = pd.Series(TradingSignal.HOLD, index=data.index)
             
             # Calculate rolling volume average
             volume_ma = data['volume'].rolling(window=self.lookback_period).mean()
@@ -50,11 +51,10 @@ class DumpStrategy(BaseStrategy):
             # Generate entry signals (buy after dump)
             for i in range(1, len(data)):
                 if dump_conditions.iloc[i]:
-                    # Enter position after dump (anticipating recovery)
-                    signals.iloc[i] = 1
+                    signals.iloc[i] = TradingSignal.BUY
                 
                 # Exit conditions
-                elif signals.iloc[i-1] == 1:  # If we're in a position
+                elif signals.iloc[i-1] == TradingSignal.BUY:  # If we're in a position
                     price_change_since_entry = (
                         data['close'].iloc[i] / data['close'].iloc[i-1] - 1
                     )
@@ -62,13 +62,13 @@ class DumpStrategy(BaseStrategy):
                     # Exit if price recovers to target or drops further
                     if (price_change_since_entry >= self.recovery_threshold or 
                         price_change_since_entry < self.price_drop_threshold):
-                        signals.iloc[i] = -1
+                        signals.iloc[i] = TradingSignal.SELL
             
             return signals
             
         except Exception as e:
             self.logger.error(f"Error generating signals: {str(e)}")
-            return pd.Series(0, index=data.index)
+            return pd.Series(TradingSignal.HOLD, index=data.index)
     
     def calculate_dump_metrics(self, data: pd.DataFrame) -> pd.DataFrame:
         """

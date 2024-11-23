@@ -12,6 +12,7 @@ from src.strategies.sma_strategy import SMAStrategy
 from src.strategies.pump_strategy import PumpStrategy
 from src.strategies.dump_strategy import DumpStrategy
 from src.backtesting.backtester import Backtester
+from src.strategies.macd_rsi_bb_strategy import MACDRSIBBStrategy
 from src.analysis.market_analyzer import MarketAnalyzer
 from src.utils.logger import setup_logger
 from src.data.data_manager import DataManager
@@ -150,7 +151,8 @@ class CryptoMarketRunner:
         strategies = {
             'sma': lambda: SMAStrategy(**self.config['strategies']['sma']),
             'pump': lambda: PumpStrategy(**self.config['strategies']['pump']),
-            'dump': lambda: DumpStrategy(**self.config['strategies']['dump'])
+            'dump': lambda: DumpStrategy(**self.config['strategies']['dump']),
+            'macd_rsi_bb': lambda: MACDRSIBBStrategy(**self.config['strategies']['macd_rsi_bb'])
         }
         
         if strategy_name not in strategies:
@@ -247,8 +249,14 @@ def main():
         runner.run_live(
             symbol=args.symbol,
             strategy_name=args.strategy,
-            interval=args.interval
+            interval=args.intervals
         )
 
 if __name__ == "__main__":
-    main() 
+    runner = CryptoMarketRunner(config_path="config/config.yaml")
+    data = runner.data_provider.get_historical_data(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
+    # print(data)
+    # runner.market_analyzer.analyze_market(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
+    runner.run_backtest(symbol="BTCUSDT", strategy_name="macd_rsi_bb", start_date="2024-01-01", end_date="2024-11-02", interval="15m")
+#    df = SMAStrategy(config=runner.config['strategies']['sma']).generate_signals(data)
+ #   print(df)

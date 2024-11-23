@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 from typing import Dict, Any
 from src.utils.logger import setup_logger
+from src.types.trading_signals import TradingSignal
 
 class BaseStrategy(ABC):
     def __init__(self, config: Dict[str, Any] = None):
@@ -17,7 +18,7 @@ class BaseStrategy(ABC):
             data: DataFrame with OHLCV data
             
         Returns:
-            Series with trading signals (1: buy, -1: sell, 0: hold)
+            Series with trading signals (TradingSignal enum values)
         """
         pass
         

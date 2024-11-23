@@ -2,6 +2,7 @@ from src.strategies.base_strategy import BaseStrategy
 import pandas as pd
 import numpy as np
 from src.utils.logger import setup_logger
+from src.types.trading_signals import TradingSignal
 
 class PumpStrategy(BaseStrategy):
     def __init__(
@@ -24,7 +25,7 @@ class PumpStrategy(BaseStrategy):
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         """Generate trading signals based on pump detection"""
         try:
-            signals = pd.Series(0, index=data.index)
+            signals = pd.Series(TradingSignal.HOLD, index=data.index)
             
             # Calculate metrics
             volume_ma = data['volume'].rolling(window=self.lookback_period).mean()
@@ -41,26 +42,25 @@ class PumpStrategy(BaseStrategy):
             entry_price = None
             
             for i in range(1, len(data)):
-                if pump_conditions.iloc[i] and signals.iloc[i-1] != 1:
-                    # Short entry after pump (anticipating reversal)
-                    signals.iloc[i] = 1
+                if pump_conditions.iloc[i] and signals.iloc[i-1] != TradingSignal.BUY:
+                    signals.iloc[i] = TradingSignal.BUY
                     entry_price = data['close'].iloc[i]
                 
-                elif signals.iloc[i-1] == 1 and entry_price is not None:
+                elif signals.iloc[i-1] == TradingSignal.BUY and entry_price is not None:
                     # Calculate current return
                     current_return = (entry_price - data['close'].iloc[i]) / entry_price
                     
                     # Exit conditions
                     if (current_return >= self.profit_target or  # Take profit
                         current_return <= self.stop_loss):       # Stop loss
-                        signals.iloc[i] = -1
+                        signals.iloc[i] = TradingSignal.SELL
                         entry_price = None
             
             return signals
             
         except Exception as e:
             self.logger.error(f"Error generating signals: {str(e)}")
-            return pd.Series(0, index=data.index)
+            return pd.Series(TradingSignal.HOLD, index=data.index)
     
     def calculate_pump_metrics(self, data: pd.DataFrame) -> pd.DataFrame:
         """

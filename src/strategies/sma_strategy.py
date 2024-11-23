@@ -2,6 +2,7 @@ from src.strategies.base_strategy import BaseStrategy
 import pandas as pd
 import numpy as np
 from src.utils.logger import setup_logger
+from src.types.trading_signals import TradingSignal
 
 class SMAStrategy(BaseStrategy):
     def __init__(self, short_window: int = 20, long_window: int = 50, **kwargs):
@@ -16,23 +17,24 @@ class SMAStrategy(BaseStrategy):
         try:
             if not self.validate_data(data):
                 self.logger.error("Invalid data format")
-                return pd.Series(0, index=data.index)
+                return pd.Series(TradingSignal.HOLD, index=data.index)
                 
-            signals = pd.Series(0, index=data.index)
+            signals = pd.Series(TradingSignal.HOLD, index=data.index)
             
             # Calculate SMAs
             short_sma = data['close'].rolling(window=self.short_window).mean()
             long_sma = data['close'].rolling(window=self.long_window).mean()
             
             # Generate signals
-            signals[short_sma > long_sma] = 1  # Buy signal
-            signals[short_sma < long_sma] = -1  # Sell signal
+            signals[short_sma > long_sma] = TradingSignal.BUY
+            signals[short_sma < long_sma] = TradingSignal.SELL
             
             # Remove signals before both SMAs are available
-            signals[:self.long_window] = 0
+            signals[:self.long_window] = TradingSignal.HOLD
             
             return signals
             
         except Exception as e:
+            raise e
             self.logger.error(f"Error generating signals: {str(e)}")
-            return pd.Series(0, index=data.index) 
+            return pd.Series(TradingSignal.HOLD, index=data.index) 

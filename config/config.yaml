@@ -27,6 +27,21 @@ strategies:
     short_window: 20
     long_window: 50
 
+  macd_rsi_bb:
+    # MACD parameters
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+
+    # RSI parameters
+    rsi_period: 14
+    rsi_overbought: 70
+    rsi_oversold: 30
+
+    # Bollinger Bands parameters
+    bb_period: 20
+    bb_std: 2.0
+
 backtesting:
   initial_capital: 10000
   commission: 0.001

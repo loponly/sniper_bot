@@ -1,14 +1,15 @@
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from src.utils.logger import setup_logger
+from src.types.trading_signals import TradingSignal
 
 @dataclass
 class Position:
-    entry_price: float
-    size: float
+    entry_price: np.float64
+    size: np.float64
     entry_time: pd.Timestamp
     side: str  # 'long' or 'short'
 
@@ -17,7 +18,7 @@ class Strategy(ABC):
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         """
         Generate trading signals based on the data
-        Returns a pandas Series with values: 1 (buy), -1 (sell), 0 (hold)
+        Returns a pandas Series with TradingSignal enum values
         """
         pass
 
@@ -40,33 +41,39 @@ class Backtester:
         """
         self.data = data
         self.strategy = strategy
-        self.initial_capital = initial_capital
-        self.commission = commission
+        self.initial_capital = np.float64(initial_capital)
+        self.commission = np.float64(commission)
         self.logger = setup_logger(self.__class__.__name__)
         self.reset()
         
-    def reset(self):
+    def reset(self) -> None:
         """Reset backtest state"""
-        self.current_position = None
-        self.trades = []
-        self.equity_curve = []
+        self.current_position: Optional[Position] = None
+        self.trades: List[Dict] = []
+        self.equity_curve: List[np.float64] = []
         
     def run(self) -> Dict:
         """Run backtest and return performance metrics"""
-        capital = self.initial_capital
+        capital = np.float64(self.initial_capital)
         self.equity_curve = [capital]
         
         try:
             signals = self.strategy.generate_signals(self.data)
             
             for i in range(1, len(self.data)):
-                current_price = self.data['close'].iloc[i]
-                signal = signals.iloc[i]
+                current_price = np.float64(self.data['close'].iloc[i])
+                signal_value = int(signals.iloc[i])
+                signal = TradingSignal(signal_value)
                 
                 # Handle position entry
-                if signal == 1 and self.current_position is None:  # Buy signal
-                    position_size = capital / current_price
-                    cost = position_size * current_price * (1 + self.commission)
+                if (signal == TradingSignal.BUY and self.current_position is None):
+                    # Calculate maximum position size considering commission
+                    max_position_size = np.float64(capital / (current_price * (1 + self.commission)))
+                    position_size = max_position_size  # Use maximum available size
+                    
+                    # Calculate total cost including commission
+                    cost = np.float64(position_size * current_price * (1 + self.commission))
+                    
                     if cost <= capital:
                         self.current_position = Position(
                             entry_price=current_price,
@@ -77,23 +84,28 @@ class Backtester:
                         capital -= cost
                 
                 # Handle position exit
-                elif signal == -1 and self.current_position is not None:  # Sell signal
-                    exit_value = self.current_position.size * current_price
-                    capital += exit_value * (1 - self.commission)
+                elif (signal == TradingSignal.SELL and 
+                      self.current_position is not None):
+                    # Calculate exit value after commission
+                    gross_value = np.float64(self.current_position.size * current_price)
+                    exit_value = np.float64(gross_value * (1 - self.commission))
+                    capital += exit_value
+                    
                     self.trades.append({
                         'entry_time': self.current_position.entry_time,
                         'exit_time': self.data.index[i],
-                        'entry_price': self.current_position.entry_price,
-                        'exit_price': current_price,
-                        'pnl': exit_value - (self.current_position.size * self.current_position.entry_price),
-                        'return': (current_price - self.current_position.entry_price) / self.current_position.entry_price
+                        'entry_price': float(self.current_position.entry_price),
+                        'exit_price': float(current_price),
+                        'pnl': float(exit_value - (self.current_position.size * self.current_position.entry_price * (1 + self.commission))),
+                        'return': float((exit_value - (self.current_position.size * self.current_position.entry_price * (1 + self.commission))) / 
+                                     (self.current_position.size * self.current_position.entry_price * (1 + self.commission)))
                     })
                     self.current_position = None
                 
                 # Update equity curve
-                current_equity = capital
+                current_equity = np.float64(capital)
                 if self.current_position is not None:
-                    position_value = self.current_position.size * current_price
+                    position_value = np.float64(self.current_position.size * current_price)
                     current_equity += position_value
                 self.equity_curve.append(current_equity)
             
@@ -101,7 +113,7 @@ class Backtester:
             
         except Exception as e:
             self.logger.error(f"Error during backtest: {str(e)}")
-            return {}
+            raise e
     
     def calculate_metrics(self) -> Dict:
         """Calculate and return performance metrics"""
@@ -111,12 +123,12 @@ class Backtester:
         trades_df = pd.DataFrame(self.trades)
         
         metrics = {
-            'total_return': (equity_curve.iloc[-1] - self.initial_capital) / self.initial_capital,
-            'sharpe_ratio': np.sqrt(252) * returns.mean() / returns.std() if len(returns) > 0 else 0,
-            'max_drawdown': (equity_curve / equity_curve.cummax() - 1).min(),
-            'number_of_trades': len(self.trades),
-            'win_rate': len(trades_df[trades_df['pnl'] > 0]) / len(trades_df) if len(trades_df) > 0 else 0,
-            'equity_curve': self.equity_curve
+            'total_return': float((equity_curve.iloc[-1] - self.initial_capital) / self.initial_capital),
+            'sharpe_ratio': float(np.sqrt(252) * returns.mean() / returns.std() if len(returns) > 0 else 0),
+            'max_drawdown': float((equity_curve / equity_curve.cummax() - 1).min()),
+            'number_of_trades': int(len(self.trades)),
+            'win_rate': float(len(trades_df[trades_df['pnl'] > 0]) / len(trades_df) if len(trades_df) > 0 else 0),
+            'equity_curve': [float(x) for x in self.equity_curve]
         }
         
         return metrics
