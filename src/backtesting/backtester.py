@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from src.utils.logger import setup_logger
 from src.types.trading_signals import TradingSignal
+from src.visualization.backtest_visualizer import BacktestVisualizer
 
 @dataclass
 class Position:
@@ -28,7 +29,9 @@ class Backtester:
         data: pd.DataFrame,
         strategy: Strategy,
         initial_capital: float = 10000,
-        commission: float = 0.001
+        commission: float = 0.001,
+        show_plot: bool = True,
+        save_plot: bool = True
     ):
         """
         Initialize backtester with OHLCV data and strategy
@@ -38,11 +41,15 @@ class Backtester:
         - strategy: Strategy instance
         - initial_capital: Starting capital
         - commission: Trading commission (e.g., 0.001 for 0.1%)
+        - show_plot: Whether to display the plot after backtest
+        - save_plot: Whether to save the plot to file
         """
         self.data = data
         self.strategy = strategy
         self.initial_capital = np.float64(initial_capital)
         self.commission = np.float64(commission)
+        self.show_plot = show_plot
+        self.save_plot = save_plot
         self.logger = setup_logger(self.__class__.__name__)
         self.reset()
         
@@ -51,11 +58,13 @@ class Backtester:
         self.current_position: Optional[Position] = None
         self.trades: List[Dict] = []
         self.equity_curve: List[np.float64] = []
+        self.capital_history: List[np.float64] = []
         
     def run(self) -> Dict:
         """Run backtest and return performance metrics"""
         capital = np.float64(self.initial_capital)
         self.equity_curve = [capital]
+        self.capital_history = [capital]
         
         try:
             signals = self.strategy.generate_signals(self.data)
@@ -102,14 +111,32 @@ class Backtester:
                     })
                     self.current_position = None
                 
-                # Update equity curve
+                # Update equity curve and capital history
                 current_equity = np.float64(capital)
                 if self.current_position is not None:
                     position_value = np.float64(self.current_position.size * current_price)
                     current_equity += position_value
+                
                 self.equity_curve.append(current_equity)
+                self.capital_history.append(capital)
             
-            return self.calculate_metrics()
+            # Create visualizer with capital history
+            self.visualizer = BacktestVisualizer(
+                data=self.data,
+                signals=signals,
+                equity_curve=self.equity_curve,
+                trades=self.trades,
+                capital_history=self.capital_history
+            )
+            
+            metrics = self.calculate_metrics()
+            
+            # Auto-plot if show_plot is True
+            if self.show_plot:
+                fig = self.plot_results(save_plots=self.save_plot)
+                fig.show()
+            
+            return metrics
             
         except Exception as e:
             self.logger.error(f"Error during backtest: {str(e)}")
@@ -132,3 +159,28 @@ class Backtester:
         }
         
         return metrics
+
+    def plot_results(self, 
+                    show_signals: bool = True, 
+                    show_equity: bool = True,
+                    save_plots: bool = False) -> None:
+        """Plot backtest results using the visualizer"""
+        if not hasattr(self, 'visualizer'):
+            raise RuntimeError("Must run backtest before plotting results")
+            
+        # Get strategy-specific metrics if available
+        strategy_metrics = None
+        if hasattr(self.strategy, 'calculate_metrics'):
+            strategy_metrics = self.strategy.calculate_metrics(self.data)
+            
+        # Create and display plots
+        fig = self.visualizer.plot_backtest_results(
+            strategy_metrics=strategy_metrics,
+            show_signals=show_signals,
+            show_equity=show_equity
+        )
+        
+        if save_plots:
+            self.visualizer.save_plots()
+            
+        return fig

@@ -49,3 +49,7 @@ Thumbs.db
 
 # Json
 *.json
+
+
+# Plots
+results/plots/*

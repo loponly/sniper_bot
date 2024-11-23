@@ -60,7 +60,9 @@ class CryptoMarketRunner:
                     strategy_name: str,
                     start_date: str,
                     end_date: str,
-                    interval: str = '1h') -> Dict:
+                    interval: str = '1h',
+                    show_plot: bool = True,
+                    save_plot: bool = True) -> Dict:
         """Run backtest for specified strategy"""
         try:
             # Get historical data
@@ -83,8 +85,9 @@ class CryptoMarketRunner:
                 data=data,
                 strategy=strategy,
                 initial_capital=self.config['backtesting']['initial_capital'],
-                commission=self.config['backtesting']['commission']
-                # Removed slippage parameter as it's not supported
+                commission=self.config['backtesting']['commission'],
+                show_plot=show_plot,
+                save_plot=save_plot
             )
             
             results = backtester.run()
@@ -231,7 +234,9 @@ def main():
             strategy_name=args.strategy,
             start_date=args.start_date,
             end_date=args.end_date,
-            interval=args.interval
+            interval=args.interval,
+            show_plot=True,
+            save_plot=True
         )
         
         print("\nBacktest Results:")
@@ -257,6 +262,14 @@ if __name__ == "__main__":
     data = runner.data_provider.get_historical_data(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
     # print(data)
     # runner.market_analyzer.analyze_market(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
-    runner.run_backtest(symbol="BTCUSDT", strategy_name="macd_rsi_bb", start_date="2024-01-01", end_date="2024-11-02", interval="15m")
+    runner.run_backtest(
+        symbol="BTCUSDT",
+        strategy_name="pump",
+        start_date="2024-01-01",
+        end_date="2024-11-02",
+        interval="1h",
+        show_plot=True,
+        save_plot=False
+    )
 #    df = SMAStrategy(config=runner.config['strategies']['sma']).generate_signals(data)
  #   print(df)
