@@ -7,89 +7,88 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  strategy_finder:
-    build: .
+  strategy_manager:
+    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
     environment:
-      - AGENT_TYPE=strategy_finder
+      - AGENT_TYPE=strategy_manager
       - REDIS_HOST=redis
-      - AGENT_INTERVAL=60
-      - HF_HOME=/app/models
-      - TRANSFORMERS_CACHE=/app/models
+      - AGENT_INTERVAL=300
+      - LOG_LEVEL=INFO
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
     volumes:
-      - model_cache:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
+      - strategy_data:/app/data
+      - ./logs:/app/logs
+    ports:
+      - "8080:8080"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    restart: always
+
+  sniper_agent:
+    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
+    environment:
+      - AGENT_TYPE=sniper
+      - REDIS_HOST=redis
+      - AGENT_INTERVAL=1  # Fast response for sniping
+      - LOG_LEVEL=INFO
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+    volumes:
+      - sniper_data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: always
 
   market_analyzer:
-    build: .
+    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
     environment:
       - AGENT_TYPE=market_analyzer
       - REDIS_HOST=redis
       - AGENT_INTERVAL=30
-      - HF_HOME=/app/models
-      - TRANSFORMERS_CACHE=/app/models
+      - LOG_LEVEL=INFO
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
     volumes:
-      - model_cache:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
+      - analyzer_data:/app/data
+      - ./logs:/app/logs
     depends_on:
-      - redis
-    restart: always
-
-  strategy_executor:
-    build: .
-    environment:
-      - AGENT_TYPE=strategy_executor
-      - REDIS_HOST=redis
-      - AGENT_INTERVAL=45
-      - HF_HOME=/app/models
-      - TRANSFORMERS_CACHE=/app/models
-    volumes:
-      - model_cache:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-    depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: always
 
   dashboard:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.dashboard
     ports:
       - "5000:5000"
     environment:
       - REDIS_HOST=redis
-    depends_on:
-      - redis
-    restart: always
-
-  code_executor:
-    build: .
-    environment:
-      - AGENT_TYPE=code_executor
-      - REDIS_HOST=redis
-      - AGENT_INTERVAL=15
-      - PYTHONPATH=/app
+      - LOG_LEVEL=INFO
     volumes:
-      - ./src:/app/src
+      - ./logs:/app/logs
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: always
 
 volumes:
   redis_data:
-  model_cache: 
+  strategy_data:
+  sniper_data:
+  analyzer_data:
+
+networks:
+  default:
+    driver: bridge 

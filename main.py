@@ -1,237 +1,151 @@
 import asyncio
-import os
-from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.task import Console, TextMentionTermination
-from autogen_agentchat.teams import RoundRobinGroupChat
-from autogen_ext.models import OpenAIChatCompletionClient
+import logging
+from typing import Dict, Any
 import redis
 import json
 from datetime import datetime
-import logging
-import yaml
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-from typing import Dict, Any
 from huggingface_hub import snapshot_download
-from pathlib import Path
-import shutil
+import os
+
+# Import agents
+from src.agents.strategy_manager_agent import StrategyManagerAgent
+from src.agents.strategy_optimizer_agent import StrategyOptimizerAgent
 from src.agents.code_executor_agent import CodeExecutorAgent
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Redis connection for inter-agent communication
-REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-
-async def execute_strategy(code: str) -> str:
-    try:
-        exec_globals = {}
-        exec(code, exec_globals)
-        result = "Strategy executed successfully"
-        redis_client.publish('execution_results', json.dumps({
-            'timestamp': datetime.now().isoformat(),
-            'result': result
-        }))
-        return result
-    except Exception as e:
-        error_msg = f"Error executing strategy: {str(e)}"
-        redis_client.publish('execution_errors', json.dumps({
-            'timestamp': datetime.now().isoformat(),
-            'error': error_msg
-        }))
-        return error_msg
-
-async def analyze_market(data: dict) -> str:
-    try:
-        from src.analysis.market_analyzer import MarketAnalyzer
-        analyzer = MarketAnalyzer()
-        results = analyzer.analyze_market(
-            symbol=data.get('symbol', 'BTCUSDT'),
-            interval=data.get('interval', '1h'),
-            start_date=data.get('start_date'),
-            end_date=data.get('end_date'),
-            volume_threshold=data.get('volume_threshold', 2.0),
-            price_threshold=data.get('price_threshold', 0.03)
+class AgentOrchestrator:
+    def __init__(self):
+        self.redis_client = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'redis'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            decode_responses=True
         )
-        redis_client.publish('market_analysis', json.dumps({
-            'timestamp': datetime.now().isoformat(),
-            'results': str(results)
-        }))
-        return str(results)
-    except Exception as e:
-        error_msg = f"Error analyzing market: {str(e)}"
-        redis_client.publish('analysis_errors', json.dumps({
-            'timestamp': datetime.now().isoformat(),
-            'error': error_msg
-        }))
-        return error_msg
-
-def load_config():
-    with open('config/agents_config.yaml', 'r') as file:
-        return yaml.safe_load(file)
-
-class ModelDownloader:
-    def __init__(self, cache_dir: str = "/app/models"):
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-    def download_model(self, model_id: str) -> str:
-        """Download model from Hugging Face and return local path"""
-        try:
-            logger.info(f"Downloading model: {model_id}")
-            local_path = snapshot_download(
-                repo_id=model_id,
-                cache_dir=self.cache_dir,
-                local_files_only=False  # Force download if not cached
-            )
-            logger.info(f"Model downloaded to: {local_path}")
-            return local_path
-        except Exception as e:
-            logger.error(f"Error downloading model {model_id}: {e}")
-            raise
+        # Initialize agents
+        self.strategy_manager = StrategyManagerAgent(self.redis_client)
+        self.strategy_optimizer = StrategyOptimizerAgent(self.redis_client)
+        self.code_executor = CodeExecutorAgent(self.redis_client)
+        
+        # Setup communication channels
+        self.channels = {
+            'strategy_management': 'strategy_management',
+            'optimization_requests': 'optimization_requests',
+            'code_execution': 'code_execution',
+            'agent_communication': 'agent_communication'
+        }
 
-class ModelManager:
-    def __init__(self, model_name: str):
-        self.downloader = ModelDownloader()
-        self.model_path = self.downloader.download_model(model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_path,
-            device_map="auto",  # Automatically handle device placement
-            torch_dtype=torch.float16  # Use half precision for memory efficiency
-        )
-        self.model.eval()
-
-    def generate_response(self, prompt: str, max_length: int = 512) -> str:
+    async def handle_agent_communication(self, message: Dict[str, Any]):
+        """Handle inter-agent communication"""
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            msg_type = message.get('type')
+            data = message.get('data', {})
             
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    inputs["input_ids"],
-                    max_length=max_length,
-                    num_return_sequences=1,
-                    temperature=0.7,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    do_sample=True,
-                    top_p=0.95
+            if msg_type == 'optimize_strategy':
+                # Strategy Manager requesting optimization
+                await self.strategy_optimizer.optimize_strategy(
+                    data['strategy_code'],
+                    data['param_space'],
+                    data['market_data']
                 )
-            
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            return response
+                
+            elif msg_type == 'execute_strategy':
+                # Strategy Manager requesting code execution
+                await self.code_executor.execute_code(
+                    data['strategy_code'],
+                    data.get('context')
+                )
+                
+            elif msg_type == 'strategy_result':
+                # Code Executor reporting strategy results
+                await self.strategy_manager.process_strategy_results(data)
+                
+            elif msg_type == 'optimization_complete':
+                # Optimizer reporting optimization results
+                await self.strategy_manager.update_strategy(
+                    data['strategy_id'],
+                    strategy_config=data['optimized_params']
+                )
+
         except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            return str(e)
+            logger.error(f"Error handling agent communication: {str(e)}")
+            self.publish_error('agent_communication_error', str(e))
 
-class ContinuousAgent:
-    def __init__(self, agent_type: str):
-        self.agent_type = agent_type
-        self.config = load_config()[agent_type]
-        self.model = ModelManager(self.config['model'])
-        self.agent = self._create_agent()
+    def publish_error(self, error_type: str, error_message: str):
+        """Publish error messages to Redis"""
+        message = {
+            'timestamp': datetime.now().isoformat(),
+            'type': 'error',
+            'error_type': error_type,
+            'message': error_message
+        }
+        self.redis_client.publish('errors', json.dumps(message))
+
+    async def monitor_channels(self):
+        """Monitor Redis channels for agent communication"""
+        pubsub = self.redis_client.pubsub()
+        pubsub.subscribe(self.channels.values())
         
-    def _create_agent(self) -> AssistantAgent:
-        if self.agent_type == "strategy_finder":
-            return AssistantAgent(
-                name="strategy_finder",
-                model_client=OpenAIChatCompletionClient(
-                    model=self.config['model'],
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                ),
-                system_message=f"""You are a strategy finder. Your role is to:
-                1. Analyze market conditions and requirements
-                2. Select the most appropriate trading strategy from available options
-                3. Provide strategy configuration parameters
-                Monitor continuously and adapt strategies based on market conditions.
-                
-                Configuration Parameters:
-                - Minimum confidence: {self.config['parameters']['min_confidence']}
-                - Maximum strategies: {self.config['parameters']['max_strategies']}
-                - Strategy timeout: {self.config['parameters']['strategy_timeout']} seconds"""
+        logger.info("Starting agent communication monitoring...")
+        
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                try:
+                    data = json.loads(message['data'])
+                    await self.handle_agent_communication(data)
+                except Exception as e:
+                    logger.error(f"Error processing message: {str(e)}")
+                    self.publish_error('message_processing_error', str(e))
+
+    async def run_agents(self):
+        """Run all agents concurrently"""
+        try:
+            await asyncio.gather(
+                self.strategy_manager.run_continuous(),
+                self.strategy_optimizer.run_continuous(),
+                self.code_executor.run_continuous(),
+                self.monitor_channels()
             )
-        elif self.agent_type == "market_analyzer":
-            return AssistantAgent(
-                name="market_analyzer",
-                model_client=OpenAIChatCompletionClient(
-                    model=self.config['model'],
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                ),
-                system_message=f"""You are a market analysis specialist. Your role is to:
-                1. Continuously analyze market data and patterns
-                2. Identify potential opportunities and risks
-                3. Provide real-time market insights
-                
-                Configuration Parameters:
-                - Symbols: {self.config['parameters']['symbols']}
-                - Timeframes: {self.config['parameters']['timeframes']}
-                - Indicators: {self.config['parameters']['indicators']}""",
-                tools=[analyze_market]
-            )
-        elif self.agent_type == "strategy_executor":
-            return AssistantAgent(
-                name="strategy_executor",
-                model_client=OpenAIChatCompletionClient(
-                    model=self.config['model'],
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                ),
-                system_message=f"""You are a strategy execution specialist. Your role is to:
-                1. Execute strategies based on real-time market analysis
-                2. Manage risk and position sizing
-                3. Monitor and report execution results
-                
-                Configuration Parameters:
-                - Maximum position size: {self.config['parameters']['max_position_size']}
-                - Stop loss: {self.config['parameters']['stop_loss']}
-                - Take profit: {self.config['parameters']['take_profit']}
-                - Maximum trades per day: {self.config['parameters']['max_trades_per_day']}
-                - Risk per trade: {self.config['parameters']['risk_per_trade']}""",
-                tools=[execute_strategy]
-            )
-        elif self.agent_type == "code_executor":
-            return CodeExecutorAgent(redis_client)
+        except Exception as e:
+            logger.error(f"Error running agents: {str(e)}")
+            self.publish_error('agent_runtime_error', str(e))
 
-    async def run_continuous(self):
-        while True:
-            try:
-                if self.agent_type == "code_executor":
-                    await self.agent.run_continuous()
-                elif self.agent_type == "strategy_finder":
-                    await self._run_strategy_finder()
-                elif self.agent_type == "market_analyzer":
-                    await self._run_market_analyzer()
-                elif self.agent_type == "strategy_executor":
-                    await self._run_strategy_executor()
-                
-                await asyncio.sleep(int(os.getenv('AGENT_INTERVAL', 60)))
-            except Exception as e:
-                logger.error(f"Error in {self.agent_type}: {str(e)}")
-                await asyncio.sleep(5)
-
-    async def _run_strategy_finder(self):
-        market_data = redis_client.get('market_analysis')
-        if market_data:
-            strategy = await self.agent.run(f"Analyze market data and recommend strategy: {market_data}")
-            redis_client.set('selected_strategy', json.dumps(strategy))
-
-    async def _run_market_analyzer(self):
-        await self.agent.run("Analyze current market conditions")
-
-    async def _run_strategy_executor(self):
-        strategy = redis_client.get('selected_strategy')
-        if strategy:
-            await self.agent.run(f"Execute strategy: {strategy}")
+    async def health_check(self) -> Dict[str, str]:
+        """Check health of all agents and services"""
+        health_status = {
+            'strategy_manager': 'healthy',
+            'strategy_optimizer': 'healthy',
+            'code_executor': 'healthy',
+            'redis': 'healthy'
+        }
+        
+        try:
+            # Check Redis connection
+            self.redis_client.ping()
+        except Exception as e:
+            health_status['redis'] = 'unhealthy'
+            logger.error(f"Redis health check failed: {str(e)}")
+        
+        return health_status
 
 async def main():
-    agent_type = os.getenv('AGENT_TYPE')
-    if not agent_type:
-        raise ValueError("AGENT_TYPE environment variable must be set")
-
-    agent = ContinuousAgent(agent_type)
-    await agent.run_continuous()
+    try:
+        orchestrator = AgentOrchestrator()
+        
+        # Start health check endpoint
+        health_status = await orchestrator.health_check()
+        if any(status == 'unhealthy' for status in health_status.values()):
+            logger.error("System health check failed")
+            return
+        
+        logger.info("Starting agent orchestration...")
+        await orchestrator.run_agents()
+        
+    except Exception as e:
+        logger.error(f"Main loop error: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())

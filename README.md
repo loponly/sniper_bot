@@ -344,3 +344,244 @@ Contributions are welcome! Please feel free to submit issues and enhancement req
 ## Disclaimer
 
 This software is for educational purposes only. Cryptocurrency trading carries significant risks. Always conduct your own research and risk assessment before trading.
+
+# Trading Agent Digital Ocean Deployment
+
+## Prerequisites
+
+1. Digital Ocean account
+2. Docker Hub account
+3. SSH key pair
+4. Domain name (optional)
+
+## Quick Deployment
+
+1. Create a Digital Ocean droplet:
+   - Ubuntu 20.04 LTS
+   - Basic plan ($5-$10/month)
+   - Add your SSH key
+
+2. Configure deployment:
+   ```bash
+   # Edit deploy.sh with your details
+   DOCKER_USERNAME="your_username"
+   SSH_KEY="path/to/your/key"
+   ```
+
+3. Deploy:
+   ```bash
+   ./deploy.sh your_droplet_ip
+   ```
+
+4. Monitor:
+   ```bash
+   ./monitor.sh your_droplet_ip
+   ```
+
+## Monitoring Options
+
+1. Web Dashboard: `http://your_droplet_ip:8080`
+2. System Metrics: `http://your_droplet_ip:19999`
+3. CLI Monitoring: `./monitor.sh your_droplet_ip`
+4. Direct Logs: `ssh root@your_droplet_ip 'docker-compose logs -f'`
+
+## Maintenance
+
+1. Update agent:
+   ```bash
+   ./deploy.sh your_droplet_ip
+   ```
+
+2. Restart services:
+   ```bash
+   ssh root@your_droplet_ip 'cd trading-agent && docker-compose restart'
+   ```
+
+3. View logs:
+   ```bash
+   ssh root@your_droplet_ip 'cd trading-agent && docker-compose logs -f'
+   ```
+
+## Security Notes
+
+- Only necessary ports are exposed (22, 8080, 19999)
+- UFW firewall enabled
+- Regular system updates
+- Container resource limits enforced
+
+## Backup
+
+Data is persisted in Docker volumes. To backup:
+```bash
+ssh root@your_droplet_ip 'cd trading-agent && ./backup.sh'
+```
+
+## Troubleshooting
+
+1. Check agent status:
+   ```bash
+   curl http://your_droplet_ip:8080/health
+   ```
+
+2. View system resources:
+   ```bash
+   ssh root@your_droplet_ip 'htop'
+   ```
+
+3. Check logs:
+   ```bash
+   ssh root@your_droplet_ip 'docker-compose logs --tail=100'
+   ```
+
+# Trading Agent Deployment
+
+## Prerequisites
+
+1. Docker and Docker Compose
+2. GitHub Account
+3. GitHub Personal Access Token with `read:packages` permission
+
+## Quick Start
+
+1. Clone the repository:
+```bash
+git clone https://github.com/your-username/trading-agent.git
+cd trading-agent
+```
+
+2. Deploy:
+```bash
+./deploy.sh
+```
+
+3. Monitor:
+```bash
+./monitor.sh
+```
+
+## GitHub Container Registry Setup
+
+1. Create a Personal Access Token:
+   - Go to GitHub Settings → Developer Settings → Personal Access Tokens
+   - Generate new token with `read:packages` permission
+   - Save the token securely
+
+2. The deployment script will prompt for your token on first run
+
+## Monitoring
+
+1. Web Dashboard: `http://localhost:8080`
+2. Container Logs: `docker-compose logs -f`
+3. Resource Usage: `docker stats`
+4. Health Check: `curl http://localhost:8080/health`
+
+## Maintenance
+
+1. Update to latest version:
+```bash
+./deploy.sh --update
+```
+
+2. Stop all services:
+```bash
+docker-compose down
+```
+
+3. View logs:
+```bash
+docker-compose logs -f
+```
+
+## Troubleshooting
+
+1. Check container status:
+```bash
+docker-compose ps
+```
+
+2. View specific service logs:
+```bash
+docker-compose logs strategy_manager
+```
+
+3. Restart services:
+```bash
+docker-compose restart
+```
+
+## Security Notes
+
+- GitHub token is stored locally in `.github_token`
+- Only necessary ports are exposed (6379, 8080)
+- Container resources are limited
+- Automatic restarts enabled
+
+# Trading Agents DigitalOcean Deployment
+
+## Prerequisites
+
+1. [DigitalOcean Account](https://cloud.digitalocean.com)
+2. [doctl](https://github.com/digitalocean/doctl#installing-doctl) installed
+3. Docker and Docker Compose
+4. SSH key added to DigitalOcean
+
+## Quick Deployment
+
+1. Configure DigitalOcean CLI:
+```bash
+doctl auth init
+```
+
+2. Deploy:
+```bash
+./deploy.sh
+```
+
+3. Monitor:
+```bash
+./do_monitor.sh
+```
+
+## Deployment Options
+
+Edit `do.config` to customize:
+- Droplet size
+- Region
+- Resource allocation
+- Monitoring intervals
+
+## Maintenance
+
+1. Update agents:
+```bash
+./deploy.sh --update
+```
+
+2. Scale resources:
+```bash
+doctl compute droplet-action resize $DROPLET_ID --size s-4vcpu-8gb
+```
+
+3. Backup data:
+```bash
+./backup.sh
+```
+
+## Monitoring
+
+1. Web Dashboard: `http://<droplet-ip>:5000`
+2. Resource Usage: `./do_monitor.sh`
+3. Logs: `ssh root@<droplet-ip> 'cd trading-agents && docker-compose logs -f'`
+
+## Cost Optimization
+
+- Use CPU-optimized droplets for strategy optimization
+- Use regular droplets for monitoring and management
+- Enable auto-shutdown during inactive periods
+
+## Security Notes
+
+- All ports except 22, 5000, and 8080 are closed
+- UFW firewall enabled
+- Regular security updates
+- Encrypted communication
