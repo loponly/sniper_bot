@@ -1,275 +1,237 @@
-import argparse
-import yaml
+import asyncio
+import os
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.task import Console, TextMentionTermination
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_ext.models import OpenAIChatCompletionClient
+import redis
 import json
-import time
-import pandas as pd
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional
+import logging
+import yaml
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+from typing import Dict, Any
+from huggingface_hub import snapshot_download
+from pathlib import Path
+import shutil
+from src.agents.code_executor_agent import CodeExecutorAgent
 
-from src.data.data_provider import BinanceDataProvider
-from src.strategies.sma_strategy import SMAStrategy
-from src.strategies.pump_strategy import PumpStrategy
-from src.strategies.dump_strategy import DumpStrategy
-from src.backtesting.backtester import Backtester
-from src.strategies.macd_rsi_bb_strategy import MACDRSIBBStrategy
-from src.analysis.market_analyzer import MarketAnalyzer
-from src.utils.logger import setup_logger
-from src.data.data_manager import DataManager
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class CryptoMarketRunner:
-    def __init__(self, config_path: str = 'config/config.yaml'):
-        """Initialize the market runner"""
-        self.logger = setup_logger('market_runner')
-        self.config = self._load_config(config_path)
-        self.data_provider = BinanceDataProvider()
-        self.market_analyzer = MarketAnalyzer()
-        self.data_manager = DataManager()
-        
-    def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from yaml file"""
-        try:
-            with open(config_path, 'r') as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            self.logger.error(f"Error loading config: {str(e)}")
-            return {}
+# Redis connection for inter-agent communication
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-    def run_analysis(self, 
-                    symbol: str,
-                    interval: str = '1h',
-                    start_date: Optional[str] = None,
-                    end_date: Optional[str] = None) -> Dict:
-        """Run market analysis"""
-        try:
-            results = self.market_analyzer.analyze_market(
-                symbol=symbol,
-                interval=interval,
-                start_date=start_date,
-                end_date=end_date,
-                volume_threshold=self.config['detectors']['pump']['volume_threshold'],
-                price_threshold=self.config['detectors']['pump']['price_threshold']
-            )
-            return results
-        except Exception as e:
-            self.logger.error(f"Analysis error: {str(e)}")
-            return {}
+async def execute_strategy(code: str) -> str:
+    try:
+        exec_globals = {}
+        exec(code, exec_globals)
+        result = "Strategy executed successfully"
+        redis_client.publish('execution_results', json.dumps({
+            'timestamp': datetime.now().isoformat(),
+            'result': result
+        }))
+        return result
+    except Exception as e:
+        error_msg = f"Error executing strategy: {str(e)}"
+        redis_client.publish('execution_errors', json.dumps({
+            'timestamp': datetime.now().isoformat(),
+            'error': error_msg
+        }))
+        return error_msg
 
-    def run_backtest(self, 
-                    symbol: str,
-                    strategy_name: str,
-                    start_date: str,
-                    end_date: str,
-                    interval: str = '1h',
-                    show_plot: bool = True,
-                    save_plot: bool = True) -> Dict:
-        """Run backtest for specified strategy"""
-        try:
-            # Get historical data
-            data = self.data_provider.get_historical_data(
-                symbol=symbol,
-                interval=interval,
-                start_date=start_date,
-                end_date=end_date
-            )
-            
-            if data.empty:
-                self.logger.error("No data available for backtest")
-                return {}
-            
-            # Initialize strategy
-            strategy = self._get_strategy(strategy_name)
-            
-            # Run backtest with only the supported parameters
-            backtester = Backtester(
-                data=data,
-                strategy=strategy,
-                initial_capital=self.config['backtesting']['initial_capital'],
-                commission=self.config['backtesting']['commission'],
-                show_plot=show_plot,
-                save_plot=save_plot
-            )
-            
-            results = backtester.run()
-            if results:  # Only save if we have results
-                self._save_results(results, f"backtest_{strategy_name}_{symbol}")
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Backtest error: {str(e)}")
-            return {
-                'total_return': 0,
-                'sharpe_ratio': 0,
-                'max_drawdown': 0,
-                'number_of_trades': 0,
-                'win_rate': 0,
-                'equity_curve': []
-            }  # Return default values on error
-
-    def run_live(self,
-                 symbol: str,
-                 strategy_name: str,
-                 interval: str = '1h') -> None:
-        """Run live trading/monitoring"""
-        try:
-            self.logger.info(f"Starting live monitoring for {symbol}")
-            strategy = self._get_strategy(strategy_name)
-            
-            while True:
-                try:
-                    # Get latest data
-                    data = self.data_provider.get_historical_data(
-                        symbol=symbol,
-                        interval=interval,
-                        limit=100
-                    )
-                    
-                    # Run analysis
-                    analysis = self.market_analyzer.analyze_market(
-                        symbol=symbol,
-                        interval=interval,
-                        data=data
-                    )
-                    
-                    # Generate signals
-                    signals = strategy.generate_signals(data)
-                    
-                    # Log results
-                    self._log_live_results(symbol, analysis, signals)
-                    
-                    # Wait for next interval
-                    time.sleep(self._get_interval_seconds(interval))
-                    
-                except Exception as e:
-                    self.logger.error(f"Error in live loop: {str(e)}")
-                    time.sleep(60)  # Wait before retry
-                    
-        except KeyboardInterrupt:
-            self.logger.info("Stopping live monitoring...")
-        except Exception as e:
-            self.logger.error(f"Live monitoring error: {str(e)}")
-
-    def _get_strategy(self, strategy_name: str):
-        """Get strategy instance based on name"""
-        strategies = {
-            'sma': lambda: SMAStrategy(**self.config['strategies']['sma']),
-            'pump': lambda: PumpStrategy(**self.config['strategies']['pump']),
-            'dump': lambda: DumpStrategy(**self.config['strategies']['dump']),
-            'macd_rsi_bb': lambda: MACDRSIBBStrategy(**self.config['strategies']['macd_rsi_bb'])
-        }
-        
-        if strategy_name not in strategies:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
-            
-        return strategies[strategy_name]()
-
-    def _save_results(self, results: Dict, prefix: str):
-        """Save results to file"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"data/results/{prefix}_{timestamp}.json"
-        
-        Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(filename, 'w') as f:
-            json.dump(results, f, indent=4)
-            
-        self.logger.info(f"Results saved to {filename}")
-
-    def _log_live_results(self, symbol: str, analysis: Dict, signals: pd.Series):
-        """Log live monitoring results"""
-        latest_signal = signals.iloc[-1] if not signals.empty else 0
-        
-        self.logger.info(f"\nSymbol: {symbol}")
-        self.logger.info(f"Signal: {latest_signal}")
-        self.logger.info("Market Health:")
-        for indicator, value in analysis['health_indicators'].items():
-            self.logger.info(f"  {indicator}: {value:.4f}")
-
-    @staticmethod
-    def _get_interval_seconds(interval: str) -> int:
-        """Convert interval string to seconds"""
-        units = {'m': 60, 'h': 3600, 'd': 86400}
-        unit = interval[-1]
-        value = int(interval[:-1])
-        return value * units[unit]
-
-def main():
-    parser = argparse.ArgumentParser(description='Crypto Market Runner')
-    parser.add_argument('mode', choices=['analyze', 'backtest', 'live'],
-                       help='Running mode')
-    parser.add_argument('--symbol', type=str, required=True,
-                       help='Trading pair symbol (e.g., BTCUSDT)')
-    parser.add_argument('--strategy', type=str, choices=['sma', 'pump', 'dump'],
-                       help='Strategy to use (required for backtest and live modes)')
-    parser.add_argument('--interval', type=str, default='1h',
-                       help='Time interval')
-    parser.add_argument('--start_date', type=str,
-                       help='Start date for backtest (YYYY-MM-DD)')
-    parser.add_argument('--end_date', type=str,
-                       help='End date for backtest (YYYY-MM-DD)')
-    parser.add_argument('--config', type=str, default='config/config.yaml',
-                       help='Path to config file')
-    
-    args = parser.parse_args()
-    
-    runner = CryptoMarketRunner(args.config)
-    
-    if args.mode == 'analyze':
-        results = runner.run_analysis(
-            symbol=args.symbol,
-            interval=args.interval,
-            start_date=args.start_date,
-            end_date=args.end_date
+async def analyze_market(data: dict) -> str:
+    try:
+        from src.analysis.market_analyzer import MarketAnalyzer
+        analyzer = MarketAnalyzer()
+        results = analyzer.analyze_market(
+            symbol=data.get('symbol', 'BTCUSDT'),
+            interval=data.get('interval', '1h'),
+            start_date=data.get('start_date'),
+            end_date=data.get('end_date'),
+            volume_threshold=data.get('volume_threshold', 2.0),
+            price_threshold=data.get('price_threshold', 0.03)
         )
-        print("\nAnalysis Results:")
-        print(json.dumps(results, indent=2))
+        redis_client.publish('market_analysis', json.dumps({
+            'timestamp': datetime.now().isoformat(),
+            'results': str(results)
+        }))
+        return str(results)
+    except Exception as e:
+        error_msg = f"Error analyzing market: {str(e)}"
+        redis_client.publish('analysis_errors', json.dumps({
+            'timestamp': datetime.now().isoformat(),
+            'error': error_msg
+        }))
+        return error_msg
+
+def load_config():
+    with open('config/agents_config.yaml', 'r') as file:
+        return yaml.safe_load(file)
+
+class ModelDownloader:
+    def __init__(self, cache_dir: str = "/app/models"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-    elif args.mode == 'backtest':
-        if not args.strategy:
-            print("Error: strategy is required for backtest mode")
-            return
-            
-        results = runner.run_backtest(
-            symbol=args.symbol,
-            strategy_name=args.strategy,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            interval=args.interval,
-            show_plot=True,
-            save_plot=True
+    def download_model(self, model_id: str) -> str:
+        """Download model from Hugging Face and return local path"""
+        try:
+            logger.info(f"Downloading model: {model_id}")
+            local_path = snapshot_download(
+                repo_id=model_id,
+                cache_dir=self.cache_dir,
+                local_files_only=False  # Force download if not cached
+            )
+            logger.info(f"Model downloaded to: {local_path}")
+            return local_path
+        except Exception as e:
+            logger.error(f"Error downloading model {model_id}: {e}")
+            raise
+
+class ModelManager:
+    def __init__(self, model_name: str):
+        self.downloader = ModelDownloader()
+        self.model_path = self.downloader.download_model(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            device_map="auto",  # Automatically handle device placement
+            torch_dtype=torch.float16  # Use half precision for memory efficiency
         )
-        
-        print("\nBacktest Results:")
-        print(f"Total Return: {results['total_return']:.2%}")
-        print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-        print(f"Max Drawdown: {results['max_drawdown']:.2%}")
-        print(f"Number of Trades: {results['number_of_trades']}")
-        print(f"Win Rate: {results['win_rate']:.2%}")
-        
-    else:  # live mode
-        if not args.strategy:
-            print("Error: strategy is required for live mode")
-            return
+        self.model.eval()
+
+    def generate_response(self, prompt: str, max_length: int = 512) -> str:
+        try:
+            inputs = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
             
-        runner.run_live(
-            symbol=args.symbol,
-            strategy_name=args.strategy,
-            interval=args.intervals
-        )
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    max_length=max_length,
+                    num_return_sequences=1,
+                    temperature=0.7,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    do_sample=True,
+                    top_p=0.95
+                )
+            
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return response
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return str(e)
+
+class ContinuousAgent:
+    def __init__(self, agent_type: str):
+        self.agent_type = agent_type
+        self.config = load_config()[agent_type]
+        self.model = ModelManager(self.config['model'])
+        self.agent = self._create_agent()
+        
+    def _create_agent(self) -> AssistantAgent:
+        if self.agent_type == "strategy_finder":
+            return AssistantAgent(
+                name="strategy_finder",
+                model_client=OpenAIChatCompletionClient(
+                    model=self.config['model'],
+                    api_key=os.getenv('OPENAI_API_KEY'),
+                ),
+                system_message=f"""You are a strategy finder. Your role is to:
+                1. Analyze market conditions and requirements
+                2. Select the most appropriate trading strategy from available options
+                3. Provide strategy configuration parameters
+                Monitor continuously and adapt strategies based on market conditions.
+                
+                Configuration Parameters:
+                - Minimum confidence: {self.config['parameters']['min_confidence']}
+                - Maximum strategies: {self.config['parameters']['max_strategies']}
+                - Strategy timeout: {self.config['parameters']['strategy_timeout']} seconds"""
+            )
+        elif self.agent_type == "market_analyzer":
+            return AssistantAgent(
+                name="market_analyzer",
+                model_client=OpenAIChatCompletionClient(
+                    model=self.config['model'],
+                    api_key=os.getenv('OPENAI_API_KEY'),
+                ),
+                system_message=f"""You are a market analysis specialist. Your role is to:
+                1. Continuously analyze market data and patterns
+                2. Identify potential opportunities and risks
+                3. Provide real-time market insights
+                
+                Configuration Parameters:
+                - Symbols: {self.config['parameters']['symbols']}
+                - Timeframes: {self.config['parameters']['timeframes']}
+                - Indicators: {self.config['parameters']['indicators']}""",
+                tools=[analyze_market]
+            )
+        elif self.agent_type == "strategy_executor":
+            return AssistantAgent(
+                name="strategy_executor",
+                model_client=OpenAIChatCompletionClient(
+                    model=self.config['model'],
+                    api_key=os.getenv('OPENAI_API_KEY'),
+                ),
+                system_message=f"""You are a strategy execution specialist. Your role is to:
+                1. Execute strategies based on real-time market analysis
+                2. Manage risk and position sizing
+                3. Monitor and report execution results
+                
+                Configuration Parameters:
+                - Maximum position size: {self.config['parameters']['max_position_size']}
+                - Stop loss: {self.config['parameters']['stop_loss']}
+                - Take profit: {self.config['parameters']['take_profit']}
+                - Maximum trades per day: {self.config['parameters']['max_trades_per_day']}
+                - Risk per trade: {self.config['parameters']['risk_per_trade']}""",
+                tools=[execute_strategy]
+            )
+        elif self.agent_type == "code_executor":
+            return CodeExecutorAgent(redis_client)
+
+    async def run_continuous(self):
+        while True:
+            try:
+                if self.agent_type == "code_executor":
+                    await self.agent.run_continuous()
+                elif self.agent_type == "strategy_finder":
+                    await self._run_strategy_finder()
+                elif self.agent_type == "market_analyzer":
+                    await self._run_market_analyzer()
+                elif self.agent_type == "strategy_executor":
+                    await self._run_strategy_executor()
+                
+                await asyncio.sleep(int(os.getenv('AGENT_INTERVAL', 60)))
+            except Exception as e:
+                logger.error(f"Error in {self.agent_type}: {str(e)}")
+                await asyncio.sleep(5)
+
+    async def _run_strategy_finder(self):
+        market_data = redis_client.get('market_analysis')
+        if market_data:
+            strategy = await self.agent.run(f"Analyze market data and recommend strategy: {market_data}")
+            redis_client.set('selected_strategy', json.dumps(strategy))
+
+    async def _run_market_analyzer(self):
+        await self.agent.run("Analyze current market conditions")
+
+    async def _run_strategy_executor(self):
+        strategy = redis_client.get('selected_strategy')
+        if strategy:
+            await self.agent.run(f"Execute strategy: {strategy}")
+
+async def main():
+    agent_type = os.getenv('AGENT_TYPE')
+    if not agent_type:
+        raise ValueError("AGENT_TYPE environment variable must be set")
+
+    agent = ContinuousAgent(agent_type)
+    await agent.run_continuous()
 
 if __name__ == "__main__":
-    runner = CryptoMarketRunner(config_path="config/config.yaml")
-    data = runner.data_provider.get_historical_data(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
-    # print(data)
-    # runner.market_analyzer.analyze_market(symbol="BTCUSDT", interval="1h", start_date="2024-01-01", end_date="2024-11-02")
-    runner.run_backtest(
-        symbol="BTCUSDT",
-        strategy_name="pump",
-        start_date="2024-01-01",
-        end_date="2024-11-02",
-        interval="1h",
-        show_plot=True,
-        save_plot=False
-    )
-#    df = SMAStrategy(config=runner.config['strategies']['sma']).generate_signals(data)
- #   print(df)
+    asyncio.run(main())

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Crypto Trading Agents Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .agent-card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .log-container {
+            height: 300px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        .log-entry {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+        }
+
+        .error {
+            color: #dc3545;
+            background: #fff5f5;
+        }
+
+        .metrics-container {
+            height: 200px;
+        }
+
+        .status-badge {
+            font-size: 0.8em;
+            padding: 5px 10px;
+        }
+
+        .control-panel {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container-fluid">
+            <span class="navbar-brand">Crypto Trading Agents Dashboard</span>
+            <div class="d-flex">
+                <span class="badge bg-success me-2" id="system-status">System Online</span>
+                <button class="btn btn-sm btn-outline-light" onclick="refreshData()">Refresh</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <!-- Control Panel -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="control-panel">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <h5>System Controls</h5>
+                            <button class="btn btn-primary btn-sm" onclick="startAllAgents()">Start All</button>
+                            <button class="btn btn-danger btn-sm" onclick="stopAllAgents()">Stop All</button>
+                        </div>
+                        <div class="col-md-3">
+                            <h5>Market Pairs</h5>
+                            <select class="form-select form-select-sm" id="trading-pair">
+                                <option value="BTCUSDT">BTC/USDT</option>
+                                <option value="ETHUSDT">ETH/USDT</option>
+                                <option value="BNBUSDT">BNB/USDT</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <h5>Timeframe</h5>
+                            <select class="form-select form-select-sm" id="timeframe">
+                                <option value="1h">1 Hour</option>
+                                <option value="4h">4 Hours</option>
+                                <option value="1d">1 Day</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <h5>Risk Level</h5>
+                            <select class="form-select form-select-sm" id="risk-level">
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Overview -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">Total Trades</h6>
+                        <h3 id="total-trades">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">Success Rate</h6>
+                        <h3 id="success-rate">0%</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">Current Strategy</h6>
+                        <h3 id="current-strategy">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">Portfolio Value</h6>
+                        <h3 id="portfolio-value">$0.00</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Strategy Finder -->
+            <div class="col-md-4">
+                <div class="card agent-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Strategy Finder</span>
+                        <div>
+                            <span class="badge bg-success status-badge" id="strategy-finder-status">Active</span>
+                            <button class="btn btn-sm btn-outline-primary"
+                                onclick="restartAgent('strategy_finder')">↻</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="metrics-container mb-3">
+                            <canvas id="strategy-metrics"></canvas>
+                        </div>
+                        <div class="log-container" id="strategy-finder-logs"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Market Analyzer -->
+            <div class="col-md-4">
+                <div class="card agent-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Market Analyzer</span>
+                        <div>
+                            <span class="badge bg-success status-badge" id="market-analyzer-status">Active</span>
+                            <button class="btn btn-sm btn-outline-primary"
+                                onclick="restartAgent('market_analyzer')">↻</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="metrics-container mb-3">
+                            <canvas id="market-metrics"></canvas>
+                        </div>
+                        <div class="log-container" id="market-analyzer-logs"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Strategy Executor -->
+            <div class="col-md-4">
+                <div class="card agent-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Strategy Executor</span>
+                        <div>
+                            <span class="badge bg-success status-badge" id="strategy-executor-status">Active</span>
+                            <button class="btn btn-sm btn-outline-primary"
+                                onclick="restartAgent('strategy_executor')">↻</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="metrics-container mb-3">
+                            <canvas id="execution-metrics"></canvas>
+                        </div>
+                        <div class="log-container" id="strategy-executor-logs"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let charts = {};
+
+        // Initialize charts
+        function initializeCharts() {
+            const chartConfigs = {
+                'strategy-metrics': {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Strategy Performance',
+                            data: [],
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1
+                        }]
+                    }
+                },
+                'market-metrics': {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Market Indicators',
+                            data: [],
+                            borderColor: 'rgb(153, 102, 255)',
+                            tension: 0.1
+                        }]
+                    }
+                },
+                'execution-metrics': {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Execution Results',
+                            data: [],
+                            borderColor: 'rgb(255, 99, 132)',
+                            tension: 0.1
+                        }]
+                    }
+                }
+            };
+
+            Object.entries(chartConfigs).forEach(([id, config]) => {
+                const ctx = document.getElementById(id).getContext('2d');
+                charts[id] = new Chart(ctx, config);
+            });
+        }
+
+        function addLogEntry(containerId, data) {
+            const container = document.getElementById(containerId);
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+
+            if (data.error) {
+                entry.classList.add('error');
+                entry.innerHTML = `
+                    <strong>${new Date(data.timestamp).toLocaleString()}</strong><br>
+                    ERROR: ${data.error}
+                `;
+            } else {
+                entry.innerHTML = `
+                    <strong>${new Date(data.timestamp).toLocaleString()}</strong><br>
+                    ${data.results || data.result || JSON.stringify(data)}
+                `;
+            }
+
+            container.insertBefore(entry, container.firstChild);
+            updateMetrics(data);
+        }
+
+        function updateMetrics(data) {
+            // Update charts based on data type
+            const timestamp = new Date(data.timestamp).toLocaleTimeString();
+
+            if (data.channel === 'market_analysis') {
+                updateChart('market-metrics', timestamp, parseFloat(data.value || 0));
+            } else if (data.channel === 'execution_results') {
+                updateChart('execution-metrics', timestamp, parseFloat(data.value || 0));
+            }
+        }
+
+        function updateChart(chartId, label, value) {
+            const chart = charts[chartId];
+            if (chart.data.labels.length > 20) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(value);
+            chart.update();
+        }
+
+        // Agent control functions
+        function restartAgent(agentType) {
+            fetch(`/api/agent/${agentType}/restart`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    console.log(`Agent ${agentType} restart:`, data);
+                    updateAgentStatus(agentType, data.status);
+                });
+        }
+
+        function startAllAgents() {
+            fetch('/api/agents/start', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('All agents started:', data);
+                    updateAllAgentStatuses(data);
+                });
+        }
+
+        function stopAllAgents() {
+            fetch('/api/agents/stop', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('All agents stopped:', data);
+                    updateAllAgentStatuses(data);
+                });
+        }
+
+        function updateAgentStatus(agentType, status) {
+            const statusElement = document.getElementById(`${agentType}-status`);
+            statusElement.className = `badge status-badge bg-${status === 'active' ? 'success' : 'danger'}`;
+            statusElement.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        }
+
+        function updateAllAgentStatuses(statuses) {
+            Object.entries(statuses).forEach(([agent, status]) => {
+                updateAgentStatus(agent, status);
+            });
+        }
+
+        // Socket event handlers
+        socket.on('agent_update', function (data) {
+            switch (data.channel) {
+                case 'market_analysis':
+                    addLogEntry('market-analyzer-logs', data);
+                    break;
+                case 'execution_results':
+                    addLogEntry('strategy-executor-logs', data);
+                    break;
+                case 'execution_errors':
+                    addLogEntry('strategy-executor-logs', data);
+                    break;
+                case 'analysis_errors':
+                    addLogEntry('market-analyzer-logs', data);
+                    break;
+            }
+        });
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function () {
+            initializeCharts();
+            refreshData();
+        });
+
+        // Refresh data periodically
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,36 @@
+strategy_finder:
+  model: "EleutherAI/gpt-neo-1.3B"
+  interval: 60 # seconds
+  parameters:
+    min_confidence: 0.7
+    max_strategies: 3
+    strategy_timeout: 300
+
+market_analyzer:
+  model: "microsoft/DialoGPT-large"
+  interval: 30 # seconds
+  parameters:
+    symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+    timeframes: ["1h", "4h", "1d"]
+    indicators:
+      - type: "SMA"
+        periods: [20, 50, 200]
+      - type: "RSI"
+        period: 14
+      - type: "MACD"
+        fast_period: 12
+        slow_period: 26
+        signal_period: 9
+      - type: "BollingerBands"
+        period: 20
+        std_dev: 2
+
+strategy_executor:
+  model: "facebook/blenderbot-400M-distill"
+  interval: 45 # seconds
+  parameters:
+    max_position_size: 0.1 # 10% of portfolio
+    stop_loss: 0.02 # 2% stop loss
+    take_profit: 0.06 # 6% take profit
+    max_trades_per_day: 10
+    risk_per_trade: 0.01 # 1% risk per trade

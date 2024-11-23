@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  strategy_finder:
+    build: .
+    environment:
+      - AGENT_TYPE=strategy_finder
+      - REDIS_HOST=redis
+      - AGENT_INTERVAL=60
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
+    volumes:
+      - model_cache:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    depends_on:
+      - redis
+    restart: always
+
+  market_analyzer:
+    build: .
+    environment:
+      - AGENT_TYPE=market_analyzer
+      - REDIS_HOST=redis
+      - AGENT_INTERVAL=30
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
+    volumes:
+      - model_cache:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    depends_on:
+      - redis
+    restart: always
+
+  strategy_executor:
+    build: .
+    environment:
+      - AGENT_TYPE=strategy_executor
+      - REDIS_HOST=redis
+      - AGENT_INTERVAL=45
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
+    volumes:
+      - model_cache:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    depends_on:
+      - redis
+    restart: always
+
+  dashboard:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    restart: always
+
+  code_executor:
+    build: .
+    environment:
+      - AGENT_TYPE=code_executor
+      - REDIS_HOST=redis
+      - AGENT_INTERVAL=15
+      - PYTHONPATH=/app
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - redis
+    restart: always
+
+volumes:
+  redis_data:
+  model_cache: 
