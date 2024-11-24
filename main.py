@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 import os
+import psutil
 from dotenv import load_dotenv
 from src.utils.local_db import LocalDatabase
 
@@ -29,7 +30,7 @@ class ResourceManager:
     async def check_resources(self) -> Dict[str, Any]:
         """Check current resource usage"""
         try:
-            import psutil
+            
             return {
                 'cpu_percent': psutil.cpu_percent(),
                 'memory_percent': psutil.virtual_memory().percent,

@@ -1,13 +1,21 @@
-transformers>=4.30.0
-torch>=2.0.0
-redis>=4.0.0
-python-binance>=1.0.16
+# Core Dependencies
+openai>=1.0.0
+python-dotenv>=0.19.0
+pyyaml>=6.0.0
+
+# Data Analysis
 pandas>=1.5.0
 numpy>=1.21.0
 ta-lib>=0.4.24
-pyyaml>=6.0.0
-sentencepiece>=0.1.99
-protobuf>=3.20.0
-huggingface_hub>=0.16.4
-accelerate>=0.20.3
-bitsandbytes>=0.41.0 
+ta>=0.10.0
+
+# Database
+sqlite3  # Built into Python
+
+# Development
+pytest>=7.0.0
+black>=22.0.0
+pylint>=2.17.0
+
+# Optional Dependencies
+aiohttp>=3.8.0
