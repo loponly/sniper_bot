@@ -6,89 +6,134 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# DigitalOcean configuration
-DO_CONFIG="do.config"
+echo -e "${YELLOW}DigitalOcean Basic Deployment (Cheapest Option)${NC}"
 
-echo -e "${YELLOW}DigitalOcean Deployment Setup${NC}"
+# Configuration
+CONFIG_FILE="config.env"
 
-# Check for doctl installation
-if ! command -v doctl &> /dev/null; then
-    echo "Installing doctl..."
-    # For Linux
-    snap install doctl
-    # Authenticate doctl
-    echo "Please authenticate with DigitalOcean:"
-    doctl auth init
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install jq
+    else
+        sudo apt-get update && sudo apt-get install -y jq
+    fi
 fi
 
-# Get or create configuration
-if [ ! -f "$DO_CONFIG" ]; then
+# First time setup
+if [ ! -f "$CONFIG_FILE" ]; then
     echo "First time setup..."
     
-    # Get DigitalOcean configuration
-    read -p "Enter Droplet name (default: trading-agents): " droplet_name
-    droplet_name=${droplet_name:-trading-agents}
-    
-    read -p "Enter region (default: nyc1): " region
-    region=${region:-nyc1}
-    
-    read -p "Enter size (default: s-2vcpu-4gb): " size
-    size=${size:-s-2vcpu-4gb}
-    
-    # Save configuration
-    cat > "$DO_CONFIG" << EOF
-DROPLET_NAME="$droplet_name"
-REGION="$region"
-SIZE="$size"
+    # Get API Token
+    echo "Create your API token at: https://cloud.digitalocean.com/account/api/tokens"
+    read -sp "Enter your DigitalOcean API Token: " do_token
+    echo
+
+    # Create config.env file
+    cat > "$CONFIG_FILE" << EOF
+# DigitalOcean Configuration
+DO_API_TOKEN=$do_token
+
+# Agent Configuration
+AGENT_TYPE=strategy_manager
+TRADING_MODE=DRY_RUN
+INITIAL_BALANCE=10000
+LOG_LEVEL=INFO
+
+# Resource Configuration
+MEMORY_LIMIT=512m
+CPU_LIMIT=0.5
 EOF
+
+    echo "Configuration saved to $CONFIG_FILE"
 fi
 
 # Load configuration
-source "$DO_CONFIG"
+source "$CONFIG_FILE"
 
-# Create Droplet
-echo -e "${GREEN}Creating DigitalOcean Droplet...${NC}"
-droplet_id=$(doctl compute droplet create \
-    --image docker-20-04 \
-    --size $SIZE \
-    --region $REGION \
-    --wait \
-    $DROPLET_NAME \
-    --format ID \
-    --no-header)
+# Verify API token
+echo -e "${GREEN}Verifying API token...${NC}"
+account_response=$(curl -s \
+    -H "Authorization: Bearer $DO_API_TOKEN" \
+    "https://api.digitalocean.com/v2/account")
 
-# Wait for Droplet to be ready
-echo "Waiting for Droplet to be ready..."
-sleep 60
+if [ -z "$account_response" ]; then
+    echo -e "${RED}Failed to get response from DigitalOcean API${NC}"
+    exit 1
+fi
 
-# Get Droplet IP
-droplet_ip=$(doctl compute droplet get $droplet_id --format PublicIPv4 --no-header)
+account_status=$(echo $account_response | jq -r '.account.status' 2>/dev/null)
+if [ "$account_status" != "active" ]; then
+    echo -e "${RED}Invalid API token or account not active${NC}"
+    echo "API Response: $account_response"
+    exit 1
+fi
 
-# Setup Docker and dependencies
-echo -e "${GREEN}Setting up Docker and dependencies...${NC}"
-ssh -o StrictHostKeyChecking=no root@$droplet_ip << 'EOF'
-    # Install Docker
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sh get-docker.sh
+# Create Droplet with basic resources
+echo -e "${GREEN}Creating Basic Droplet...${NC}"
+create_response=$(curl -s -X POST \
+    -H "Authorization: Bearer $DO_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "name": "trading-agents-basic",
+        "region": "sgp1",
+        "size": "s-1vcpu-1gb",
+        "image": "docker-20-04",
+        "monitoring": true,
+        "tags": ["trading-agents"],
+        "user_data": "#cloud-config\npackage_update: true\npackages:\n- docker.io\n- docker-compose\n- sqlite3"
+    }' \
+    "https://api.digitalocean.com/v2/droplets")
 
-    # Install Docker Compose
-    curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
+DROPLET_ID=$(echo $create_response | jq -r '.droplet.id')
 
-    # Create directories
-    mkdir -p /root/trading-agents/data
-    mkdir -p /root/trading-agents/logs
+# Wait for droplet to be active
+echo "Waiting for droplet to be ready..."
+while true; do
+    status=$(curl -s \
+        -H "Authorization: Bearer $DO_API_TOKEN" \
+        "https://api.digitalocean.com/v2/droplets/$DROPLET_ID" \
+        | jq -r '.droplet.status')
+    
+    if [ "$status" == "active" ]; then
+        break
+    fi
+    echo -n "."
+    sleep 5
+done
+
+# Get droplet IP
+DROPLET_IP=$(curl -s \
+    -H "Authorization: Bearer $DO_API_TOKEN" \
+    "https://api.digitalocean.com/v2/droplets/$DROPLET_ID" \
+    | jq -r '.droplet.networks.v4[0].ip_address')
+
+echo -e "\nDroplet IP: $DROPLET_IP"
+
+# Save deployment info
+cat > "deployment.info" << EOF
+DROPLET_ID=$DROPLET_ID
+DROPLET_IP=$DROPLET_IP
 EOF
 
-# Copy files to Droplet
-echo -e "${GREEN}Copying configuration files...${NC}"
-scp -o StrictHostKeyChecking=no docker-compose.yml root@$droplet_ip:/root/trading-agents/
-scp -o StrictHostKeyChecking=no .env root@$droplet_ip:/root/trading-agents/
+# Copy files to droplet
+echo -e "${GREEN}Copying files to droplet...${NC}"
+scp -o StrictHostKeyChecking=no -r \
+    src \
+    scripts \
+    config.env \
+    docker-compose.yml \
+    Dockerfile \
+    Dockerfile.dashboard \
+    requirements.txt \
+    requirements.dashboard.txt \
+    root@$DROPLET_IP:/root/trading-agents/
 
-# Start services
-echo -e "${GREEN}Starting services...${NC}"
-ssh -o StrictHostKeyChecking=no root@$droplet_ip << 'EOF'
+# Initialize and start services
+echo -e "${GREEN}Initializing services...${NC}"
+ssh -o StrictHostKeyChecking=no root@$DROPLET_IP << EOF
     cd /root/trading-agents
+    mkdir -p data logs
     docker-compose pull
     docker-compose up -d
 EOF
@@ -96,25 +141,19 @@ EOF
 echo -e "
 ${GREEN}Deployment Complete!${NC}
 
-📊 Access your agents:
-   - Dashboard: http://$droplet_ip:5000
-   - API: http://$droplet_ip:8080
+📊 Access your services:
+   - Dashboard: http://$DROPLET_IP:5000
+   - API: http://$DROPLET_IP:8080
 
-💻 SSH Access:
-   ssh root@$droplet_ip
+💾 Database:
+   - SQLite: /root/trading-agents/data/trading.db
 
-📝 View Logs:
-   ssh root@$droplet_ip 'cd trading-agents && docker-compose logs -f'
+📝 Logs:
+   - Directory: /root/trading-agents/logs
 
-🔄 Update Services:
-   ./deploy.sh --update
+🔍 Monitor:
+   ./do_monitor.sh
 
 ❌ Cleanup:
-   doctl compute droplet delete $droplet_id
-"
-
-# Save deployment info
-cat > "deployment.info" << EOF
-DROPLET_ID=$droplet_id
-DROPLET_IP=$droplet_ip
-EOF 
+   curl -X DELETE -H \"Authorization: Bearer \$DO_API_TOKEN\" \"https://api.digitalocean.com/v2/droplets/$DROPLET_ID\"
+" 

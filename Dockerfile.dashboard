@@ -12,15 +12,26 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.dashboard.txt .
 RUN pip install --no-cache-dir -r requirements.dashboard.txt
 
-# Create log directory
-RUN mkdir -p /app/logs
+# Create necessary directories
+RUN mkdir -p /app/static/css /app/static/js /app/templates /app/logs
 
 # Copy dashboard files
-COPY scripts/dashboard /app
+COPY scripts/dashboard/app.py .
+COPY scripts/dashboard/templates/* ./templates/
+COPY scripts/dashboard/static/css/* ./static/css/
+COPY scripts/dashboard/static/js/* ./static/js/
+
+# Set environment variables
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+ENV PYTHONUNBUFFERED=1
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
+
+# Expose port
+EXPOSE 5000
 
 # Run the dashboard
 CMD ["python", "app.py"] 

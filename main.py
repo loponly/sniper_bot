@@ -1,147 +1,160 @@
 import asyncio
 import logging
-from typing import Dict, Any
-import redis
-import json
+from typing import Dict, Any, Optional
 from datetime import datetime
-from huggingface_hub import snapshot_download
 import os
+from dotenv import load_dotenv
+from src.utils.local_db import LocalDatabase
 
-# Import agents
-from src.agents.strategy_manager_agent import StrategyManagerAgent
-from src.agents.strategy_optimizer_agent import StrategyOptimizerAgent
-from src.agents.code_executor_agent import CodeExecutorAgent
+# Load configuration
+load_dotenv('config.env')
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Setup logging with file rotation
+logging.basicConfig(
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO')),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/trading.log', maxBytes=1024*1024, backupCount=3),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
+
+class ResourceManager:
+    """Manage system resources"""
+    def __init__(self):
+        self.memory_limit = os.getenv('MEMORY_LIMIT', '256m')
+        self.cpu_limit = float(os.getenv('CPU_LIMIT', '0.2'))
+        
+    async def check_resources(self) -> Dict[str, Any]:
+        """Check current resource usage"""
+        try:
+            import psutil
+            return {
+                'cpu_percent': psutil.cpu_percent(),
+                'memory_percent': psutil.virtual_memory().percent,
+                'disk_percent': psutil.disk_usage('/').percent
+            }
+        except Exception as e:
+            logger.error(f"Error checking resources: {str(e)}")
+            return {}
+
+class TradingMode:
+    def __init__(self):
+        self.api_key: Optional[str] = os.getenv('BINANCE_API_KEY')
+        self.api_secret: Optional[str] = os.getenv('BINANCE_API_SECRET')
+        self.is_dry_run: bool = not (self.api_key and self.api_secret)
+        self.initial_balance: float = float(os.getenv('INITIAL_BALANCE', 10000.0))
+        
+    @property
+    def mode(self) -> str:
+        return "DRY_RUN" if self.is_dry_run else "LIVE"
 
 class AgentOrchestrator:
     def __init__(self):
-        self.redis_client = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'redis'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            decode_responses=True
-        )
+        self.trading_mode = TradingMode()
+        self.db = LocalDatabase()
+        self.resources = ResourceManager()
         
-        # Initialize agents
-        self.strategy_manager = StrategyManagerAgent(self.redis_client)
-        self.strategy_optimizer = StrategyOptimizerAgent(self.redis_client)
-        self.code_executor = CodeExecutorAgent(self.redis_client)
+        # Initialize single agent based on configuration
+        self.agent_type = os.getenv('AGENT_TYPE', 'strategy_manager')
+        self.agent = self._create_agent(self.agent_type)
         
-        # Setup communication channels
-        self.channels = {
-            'strategy_management': 'strategy_management',
-            'optimization_requests': 'optimization_requests',
-            'code_execution': 'code_execution',
-            'agent_communication': 'agent_communication'
-        }
-
-    async def handle_agent_communication(self, message: Dict[str, Any]):
-        """Handle inter-agent communication"""
-        try:
-            msg_type = message.get('type')
-            data = message.get('data', {})
-            
-            if msg_type == 'optimize_strategy':
-                # Strategy Manager requesting optimization
-                await self.strategy_optimizer.optimize_strategy(
-                    data['strategy_code'],
-                    data['param_space'],
-                    data['market_data']
-                )
-                
-            elif msg_type == 'execute_strategy':
-                # Strategy Manager requesting code execution
-                await self.code_executor.execute_code(
-                    data['strategy_code'],
-                    data.get('context')
-                )
-                
-            elif msg_type == 'strategy_result':
-                # Code Executor reporting strategy results
-                await self.strategy_manager.process_strategy_results(data)
-                
-            elif msg_type == 'optimization_complete':
-                # Optimizer reporting optimization results
-                await self.strategy_manager.update_strategy(
-                    data['strategy_id'],
-                    strategy_config=data['optimized_params']
-                )
-
-        except Exception as e:
-            logger.error(f"Error handling agent communication: {str(e)}")
-            self.publish_error('agent_communication_error', str(e))
-
-    def publish_error(self, error_type: str, error_message: str):
-        """Publish error messages to Redis"""
-        message = {
-            'timestamp': datetime.now().isoformat(),
-            'type': 'error',
-            'error_type': error_type,
-            'message': error_message
-        }
-        self.redis_client.publish('errors', json.dumps(message))
-
-    async def monitor_channels(self):
-        """Monitor Redis channels for agent communication"""
-        pubsub = self.redis_client.pubsub()
-        pubsub.subscribe(self.channels.values())
-        
-        logger.info("Starting agent communication monitoring...")
-        
-        for message in pubsub.listen():
-            if message['type'] == 'message':
-                try:
-                    data = json.loads(message['data'])
-                    await self.handle_agent_communication(data)
-                except Exception as e:
-                    logger.error(f"Error processing message: {str(e)}")
-                    self.publish_error('message_processing_error', str(e))
-
-    async def run_agents(self):
-        """Run all agents concurrently"""
-        try:
-            await asyncio.gather(
-                self.strategy_manager.run_continuous(),
-                self.strategy_optimizer.run_continuous(),
-                self.code_executor.run_continuous(),
-                self.monitor_channels()
+        # Initialize trading mode and balance
+        if self.trading_mode.is_dry_run:
+            self.db.execute_query(
+                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                ('trading_mode', 'DRY_RUN')
             )
+            self.db.execute_query(
+                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                ('simulated_balance', str(self.trading_mode.initial_balance))
+            )
+            logger.info(f"Starting in DRY RUN mode with {self.trading_mode.initial_balance} USDT")
+        else:
+            self.db.execute_query(
+                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                ('trading_mode', 'LIVE')
+            )
+            logger.info("Starting in LIVE mode with Binance API")
+
+    def _create_agent(self, agent_type: str):
+        """Create single agent based on type"""
+        if agent_type == 'strategy_manager':
+            from src.agents.strategy_manager_agent import StrategyManagerAgent
+            return StrategyManagerAgent(self.db, self.trading_mode)
+        elif agent_type == 'strategy_optimizer':
+            from src.agents.strategy_optimizer_agent import StrategyOptimizerAgent
+            return StrategyOptimizerAgent(self.db, self.trading_mode)
+        elif agent_type == 'code_executor':
+            from src.agents.code_executor_agent import CodeExecutorAgent
+            return CodeExecutorAgent(self.db, self.trading_mode)
+        else:
+            raise ValueError(f"Unknown agent type: {agent_type}")
+
+    async def run(self):
+        """Run single agent with resource monitoring"""
+        try:
+            while True:
+                # Check resources before running agent
+                resources = await self.resources.check_resources()
+                if resources.get('memory_percent', 0) > 90 or resources.get('cpu_percent', 0) > 90:
+                    logger.warning("High resource usage detected, waiting...")
+                    await asyncio.sleep(30)
+                    continue
+
+                # Run agent
+                await self.agent.run_continuous()
+                
+                # Short sleep to prevent tight loop
+                await asyncio.sleep(1)
+                
         except Exception as e:
-            logger.error(f"Error running agents: {str(e)}")
-            self.publish_error('agent_runtime_error', str(e))
+            logger.error(f"Error in agent execution: {str(e)}")
+            self.db.execute_query(
+                "INSERT INTO errors (error_type, message, timestamp) VALUES (?, ?, ?)",
+                ('execution_error', str(e), datetime.now().isoformat())
+            )
 
     async def health_check(self) -> Dict[str, str]:
-        """Check health of all agents and services"""
-        health_status = {
-            'strategy_manager': 'healthy',
-            'strategy_optimizer': 'healthy',
-            'code_executor': 'healthy',
-            'redis': 'healthy'
-        }
-        
+        """Check system health"""
         try:
-            # Check Redis connection
-            self.redis_client.ping()
+            health_status = {
+                'agent': 'healthy',
+                'database': 'healthy',
+                'resources': 'healthy'
+            }
+            
+            # Check database
+            try:
+                self.db.execute_query("SELECT 1")
+            except Exception as e:
+                health_status['database'] = 'unhealthy'
+                logger.error(f"Database health check failed: {str(e)}")
+            
+            # Check resources
+            resources = await self.resources.check_resources()
+            if any(v > 90 for v in resources.values()):
+                health_status['resources'] = 'warning'
+            
+            return health_status
+            
         except Exception as e:
-            health_status['redis'] = 'unhealthy'
-            logger.error(f"Redis health check failed: {str(e)}")
-        
-        return health_status
+            logger.error(f"Health check error: {str(e)}")
+            return {'error': str(e)}
 
 async def main():
     try:
         orchestrator = AgentOrchestrator()
         
-        # Start health check endpoint
+        # Check system health
         health_status = await orchestrator.health_check()
-        if any(status == 'unhealthy' for status in health_status.values()):
+        if 'unhealthy' in health_status.values():
             logger.error("System health check failed")
             return
         
-        logger.info("Starting agent orchestration...")
-        await orchestrator.run_agents()
+        logger.info(f"Starting agent orchestration with type: {orchestrator.agent_type}")
+        await orchestrator.run()
         
     except Exception as e:
         logger.error(f"Main loop error: {str(e)}")

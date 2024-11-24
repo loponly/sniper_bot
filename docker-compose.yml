@@ -1,71 +1,55 @@
 version: '3.8'
 
 services:
-  redis:
-    image: redis:latest
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: always
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   strategy_manager:
-    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
+    build: .
     environment:
       - AGENT_TYPE=strategy_manager
-      - REDIS_HOST=redis
-      - AGENT_INTERVAL=300
-      - LOG_LEVEL=INFO
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - TRADING_MODE=${TRADING_MODE:-DRY_RUN}
+      - INITIAL_BALANCE=${INITIAL_BALANCE:-10000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_PATH=/app/data/trading.db
     volumes:
-      - strategy_data:/app/data
+      - ./src:/app/src
+      - ./data:/app/data
       - ./logs:/app/logs
     ports:
       - "8080:8080"
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
 
-  sniper_agent:
-    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
+  strategy_optimizer:
+    build: .
     environment:
-      - AGENT_TYPE=sniper
-      - REDIS_HOST=redis
-      - AGENT_INTERVAL=1  # Fast response for sniping
-      - LOG_LEVEL=INFO
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - AGENT_TYPE=strategy_optimizer
+      - TRADING_MODE=${TRADING_MODE:-DRY_RUN}
+      - INITIAL_BALANCE=${INITIAL_BALANCE:-10000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_PATH=/app/data/trading.db
     volumes:
-      - sniper_data:/app/data
+      - ./src:/app/src
+      - ./data:/app/data
       - ./logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: always
 
-  market_analyzer:
-    image: ghcr.io/${GITHUB_USERNAME}/sniper-bot:latest
+  code_executor:
+    build: .
     environment:
-      - AGENT_TYPE=market_analyzer
-      - REDIS_HOST=redis
-      - AGENT_INTERVAL=30
-      - LOG_LEVEL=INFO
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - AGENT_TYPE=code_executor
+      - TRADING_MODE=${TRADING_MODE:-DRY_RUN}
+      - INITIAL_BALANCE=${INITIAL_BALANCE:-10000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_PATH=/app/data/trading.db
     volumes:
-      - analyzer_data:/app/data
+      - ./src:/app/src
+      - ./data:/app/data
       - ./logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: always
 
   dashboard:
     build:
@@ -74,21 +58,21 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - REDIS_HOST=redis
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_PATH=/app/data/trading.db
     volumes:
+      - ./data:/app/data
       - ./logs:/app/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
 
 volumes:
-  redis_data:
-  strategy_data:
-  sniper_data:
-  analyzer_data:
-
-networks:
-  default:
-    driver: bridge 
+  data:
+  logs: 

@@ -7,62 +7,60 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${YELLOW}Trading Agent Monitor${NC}"
+# Load configuration
+source config.env
 
-# Function to check agent health
-check_agent_health() {
-    local agent=$1
-    local status=$(curl -s http://localhost:8080/health | jq -r ".$agent")
-    if [ "$status" == "healthy" ]; then
-        echo -e "${GREEN}✓${NC}"
+# Function to get trading mode and balance
+get_trading_info() {
+    local mode=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT get trading_mode)
+    local balance=""
+    if [ "$mode" == "DRY_RUN" ]; then
+        balance=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT get simulated_balance)
+        echo -e "Mode: ${RED}DRY RUN${NC}"
+        echo -e "Simulated Balance: ${GREEN}$balance USDT${NC}"
     else
-        echo -e "${RED}✗${NC}"
+        echo -e "Mode: ${GREEN}LIVE TRADING${NC}"
     fi
 }
 
-# Function to get agent metrics
-get_agent_metrics() {
-    local agent=$1
-    local metrics=$(curl -s http://localhost:8080/metrics/$agent)
-    echo "$metrics" | jq '.'
+# Function to get backtest results
+get_backtest_results() {
+    local results=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT --raw keys "backtest_results:*" | tail -n 5)
+    for key in $results; do
+        echo "Result: $key"
+        redis-cli -h $REDIS_HOST -p $REDIS_PORT hgetall "$key"
+    done
 }
 
 while true; do
     clear
+    echo -e "${YELLOW}Trading Agents Monitor${NC}"
+    echo "----------------------------------------"
     
-    # Agent Status
+    # Show trading mode and balance
+    get_trading_info
+    echo "----------------------------------------"
+    
+    # Show agent status
     echo -e "${BLUE}Agent Status:${NC}"
-    echo -e "Strategy Manager: $(check_agent_health strategy_manager)"
-    echo -e "Strategy Optimizer: $(check_agent_health strategy_optimizer)"
-    echo -e "Code Executor: $(check_agent_health code_executor)"
-    echo -e "Redis: $(check_agent_health redis)"
-    echo
-    
-    # Container Status
-    echo -e "${BLUE}Container Status:${NC}"
     docker-compose ps
-    echo
+    echo "----------------------------------------"
     
-    # Resource Usage
+    # Show resource usage
     echo -e "${BLUE}Resource Usage:${NC}"
     docker stats --no-stream
-    echo
+    echo "----------------------------------------"
     
-    # Agent Metrics
-    echo -e "${BLUE}Agent Metrics:${NC}"
-    echo -e "${YELLOW}Strategy Manager:${NC}"
-    get_agent_metrics strategy_manager
-    echo -e "${YELLOW}Strategy Optimizer:${NC}"
-    get_agent_metrics strategy_optimizer
-    echo -e "${YELLOW}Code Executor:${NC}"
-    get_agent_metrics code_executor
-    echo
+    # Show recent backtest results
+    echo -e "${BLUE}Recent Backtest Results:${NC}"
+    get_backtest_results
+    echo "----------------------------------------"
     
-    # Latest Logs
+    # Show logs
     echo -e "${BLUE}Recent Logs:${NC}"
-    tail -n 10 ./logs/trading_agent.log
-    echo
+    docker-compose logs --tail=5
+    echo "----------------------------------------"
     
-    echo -e "${YELLOW}🔄 Refreshing in 30 seconds... (Ctrl+C to exit)${NC}"
+    echo -e "${YELLOW}Refreshing in 30 seconds... (Ctrl+C to exit)${NC}"
     sleep 30
 done 

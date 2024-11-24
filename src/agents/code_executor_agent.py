@@ -1,23 +1,20 @@
-import ast
-import sys
 import logging
 from typing import Dict, Any, Optional
-import traceback
-from io import StringIO
-import contextlib
-import redis
-import json
 from datetime import datetime
+import asyncio
+import ast
+from src.utils.local_db import LocalDatabase
 
 class CodeExecutorAgent:
-    def __init__(self, redis_client: redis.Redis):
+    def __init__(self, db: LocalDatabase, trading_mode):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.redis_client = redis_client
+        self.db = db
+        self.trading_mode = trading_mode
         self.allowed_modules = {
-            'pandas', 'numpy', 'ta', 'sklearn', 
+            'pandas', 'numpy', 'ta', 
             'src.strategies', 'src.analysis', 'src.utils'
         }
-        
+
     def validate_code(self, code: str) -> bool:
         """Validate code for security"""
         try:
@@ -34,99 +31,78 @@ class CodeExecutorAgent:
         except SyntaxError:
             return False
 
-    @contextlib.contextmanager
-    def capture_output(self):
-        """Capture stdout and stderr"""
-        new_out, new_err = StringIO(), StringIO()
-        old_out, old_err = sys.stdout, sys.stderr
+    async def execute_code(self, code_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute strategy code"""
         try:
-            sys.stdout, sys.stderr = new_out, new_err
-            yield sys.stdout, sys.stderr
-        finally:
-            sys.stdout, sys.stderr = old_out, old_err
+            if not self.validate_code(code_data['code']):
+                raise ValueError("Code validation failed")
 
-    def execute_code(self, code: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Execute code safely and return results"""
-        if not self.validate_code(code):
-            error_msg = "Code validation failed: Unauthorized imports or operations"
-            self.publish_result(success=False, error=error_msg)
-            return {"success": False, "error": error_msg}
+            # Save execution request
+            execution_id = self.db.execute_query(
+                """
+                INSERT INTO code_executions 
+                (code, params, execution_time)
+                VALUES (?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    code_data['code'],
+                    str(code_data.get('params', {})),
+                    datetime.now().isoformat()
+                )
+            )
 
-        local_vars = context or {}
-        
-        try:
-            with self.capture_output() as (out, err):
-                exec(code, local_vars)
-                
-            result = {
-                "success": True,
-                "output": out.getvalue(),
-                "error": err.getvalue(),
-                "variables": {
-                    k: v for k, v in local_vars.items() 
-                    if not k.startswith('__') and k != 'code'
+            if self.trading_mode.is_dry_run:
+                # Simulate execution
+                result = {
+                    'execution_id': execution_id,
+                    'status': 'simulated',
+                    'output': 'Code execution simulated'
                 }
-            }
-            
-            self.publish_result(success=True, result=result)
+            else:
+                # Real execution
+                result = await self._execute_code(code_data)
+
+            # Update execution result
+            self.db.execute_query(
+                """
+                UPDATE code_executions 
+                SET result = ?, status = ? 
+                WHERE id = ?
+                """,
+                (str(result), 'completed', execution_id)
+            )
+
             return result
-            
+
         except Exception as e:
-            error_msg = f"Execution error: {str(e)}\n{traceback.format_exc()}"
-            self.publish_result(success=False, error=error_msg)
-            return {"success": False, "error": error_msg}
+            self.logger.error(f"Error executing code: {str(e)}")
+            return {'error': str(e)}
 
-    def publish_result(self, success: bool, result: Dict = None, error: str = None):
-        """Publish execution results to Redis"""
-        message = {
-            'timestamp': datetime.now().isoformat(),
-            'success': success,
-            'type': 'execution_result'
-        }
-        
-        if success and result:
-            message['result'] = result
-        if error:
-            message['error'] = error
-            
-        self.redis_client.publish('code_execution', json.dumps(message))
-
-    def run_strategy_code(self, strategy_code: str, market_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute strategy code with market data context"""
-        context = {
-            'market_data': market_data,
-            'pd': __import__('pandas'),
-            'np': __import__('numpy'),
-            'ta': __import__('ta')
-        }
-        return self.execute_code(strategy_code, context)
+    async def _execute_code(self, code_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute code in a safe environment"""
+        # Implement your code execution logic here
+        pass
 
     async def run_continuous(self):
-        """Run continuously to execute code from Redis queue"""
+        """Run continuous code execution"""
         self.logger.info("Starting Code Executor Agent")
         
         while True:
             try:
-                # Get code from Redis queue
-                code_data = self.redis_client.brpop('code_execution_queue', timeout=1)
+                # Get pending code executions
+                executions = self.db.execute_query(
+                    "SELECT * FROM code_executions WHERE status = 'pending'"
+                )
                 
-                if code_data:
-                    _, code_str = code_data
-                    code_info = json.loads(code_str)
+                for execution in executions:
+                    await self.execute_code({
+                        'code': execution['code'],
+                        'params': eval(execution['params'])
+                    })
                     
-                    # Execute code with appropriate context
-                    if code_info.get('type') == 'strategy':
-                        result = self.run_strategy_code(
-                            code_info['code'],
-                            code_info.get('market_data', {})
-                        )
-                    else:
-                        result = self.execute_code(code_info['code'])
-                    
-                    # Store result
-                    result_key = f"execution_result:{code_info.get('id', datetime.now().isoformat())}"
-                    self.redis_client.setex(result_key, 3600, json.dumps(result))  # Expire in 1 hour
-                    
+                await asyncio.sleep(1)  # Check frequently
+                
             except Exception as e:
-                self.logger.error(f"Error in code execution loop: {str(e)}")
-                self.publish_result(success=False, error=str(e)) 
+                self.logger.error(f"Error in execution loop: {str(e)}")
+                await asyncio.sleep(5)

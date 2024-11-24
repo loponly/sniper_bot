@@ -1,0 +1,49 @@
+/* Dashboard Styles */
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    margin-bottom: 1rem;
+}
+
+.card-header {
+    background-color: #fff;
+    border-bottom: 1px solid rgba(0, 0, 0, .125);
+    padding: 0.75rem 1.25rem;
+}
+
+.table-responsive {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.badge {
+    font-size: 0.875em;
+}
+
+.status-badge {
+    width: 80px;
+    text-align: center;
+}
+
+.chart-container {
+    position: relative;
+    height: 200px;
+}
+
+.metric-card h2 {
+    font-size: 2rem;
+    font-weight: bold;
+    margin: 0;
+    color: #0d6efd;
+}
+
+.error-text {
+    color: #dc3545;
+}
+
+.success-text {
+    color: #198754;
+}

@@ -585,3 +585,60 @@ doctl compute droplet-action resize $DROPLET_ID --size s-4vcpu-8gb
 - UFW firewall enabled
 - Regular security updates
 - Encrypted communication
+
+## Trading Modes
+
+The system supports two modes of operation:
+
+1. Live Trading
+   - Requires Binance API keys
+   - Real trading with actual funds
+   - Full access to Binance API
+
+2. Dry Run (Default)
+   - No API keys required
+   - Simulated trading with 10,000 USDT
+   - Perfect for testing strategies
+   - No real funds at risk
+
+To switch modes:
+
+1. For Dry Run (default):
+   - Leave `BINANCE_API_KEY` and `BINANCE_API_SECRET` empty in config.env
+
+2. For Live Trading:
+   - Add your Binance API keys to config.env
+   - System automatically switches to live mode
+
+## LLM Model Configuration
+
+The system supports multiple LLM providers and models:
+
+### OpenAI Models
+- GPT-4 (default)
+- GPT-4-32k
+- GPT-4-1106-preview
+- GPT-4-vision-preview
+
+Configure in config.env:
+```bash
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4
+OPENAI_API_KEY=your_api_key
+```
+
+### Agent-Specific Models
+You can configure different models for each agent:
+```bash
+STRATEGY_FINDER_MODEL=gpt-4
+MARKET_ANALYZER_MODEL=gpt-4-32k
+OPTIMIZER_MODEL=gpt-4-1106-preview
+```
+
+### Model Parameters
+Customize model behavior:
+```bash
+MODEL_MAX_TOKENS=8000
+MODEL_TEMPERATURE=0.7
+MODEL_TOP_P=0.95
+```
