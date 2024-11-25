@@ -4,9 +4,6 @@ from datetime import datetime
 import asyncio
 import ast
 import os
-import sys
-import subprocess
-import pkg_resources
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
 import autogen

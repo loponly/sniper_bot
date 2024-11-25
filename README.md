@@ -642,3 +642,156 @@ MODEL_MAX_TOKENS=8000
 MODEL_TEMPERATURE=0.7
 MODEL_TOP_P=0.95
 ```
+
+## Code Executor Agent Architecture
+
+### Overview Diagram
+```
+┌─────────────────────────────────────────┐
+│            Code Executor Agent          │
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────────┐       ┌─────────────┐  │
+│  │   AutoGen   │       │    Safe     │  │
+│  │  Assistant  │◄─────►│  Executor   │  │
+│  └─────────────┘       └─────────────┘  │
+│         ▲                    ▲          │
+│         │                    │          │
+│         ▼                    ▼          │
+│  ┌─────────────┐       ┌─────────────┐  │
+│  │    Code     │       │  Sandbox    │  │
+│  │  Generator  │       │ Environment │  │
+│  └─────────────┘       └─────────────┘  │
+│         ▲                    ▲          │
+│         │                    │          │
+│         ▼                    ▼          │
+│  ┌─────────────┐       ┌─────────────┐  │
+│  │   Error     │       │  Module     │  │
+│  │  Handler    │       │  Manager    │  │
+│  └─────────────┘       └─────────────┘  │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+### Components
+
+1. **AutoGen Assistant**
+   - Handles code generation requests
+   - Uses GPT-4 for code synthesis
+   - Maintains conversation context
+   - Provides code fixes when needed
+
+2. **Safe Executor**
+   - Executes code in isolated environment
+   - Manages resource limits
+   - Handles I/O redirection
+   - Provides execution results
+
+3. **Code Generator**
+   - Generates implementation code
+   - Creates test cases
+   - Follows specified format
+   - Handles code organization
+
+4. **Sandbox Environment**
+   - Restricted Python environment
+   - Limited module access
+   - Resource monitoring
+   - Security controls
+
+5. **Error Handler**
+   - Catches execution errors
+   - Provides detailed error context
+   - Initiates code fixes
+   - Maintains error logs
+
+6. **Module Manager**
+   - Manages allowed modules
+   - Handles package installation
+   - Validates imports
+   - Controls module access
+
+### Workflow
+
+1. **Code Generation**
+```mermaid
+sequenceDiagram
+    User->>Agent: Submit Prompt
+    Agent->>Assistant: Generate Code
+    Assistant->>Code Generator: Create Implementation
+    Code Generator->>Error Handler: Validate Code
+    Error Handler->>Agent: Return Valid Code
+```
+
+2. **Code Execution**
+```mermaid
+sequenceDiagram
+    Agent->>Safe Executor: Submit Code
+    Safe Executor->>Module Manager: Check Imports
+    Module Manager->>Sandbox: Load Modules
+    Sandbox->>Safe Executor: Execute Code
+    Safe Executor->>Agent: Return Results
+```
+
+### Security Features
+
+- Restricted module imports
+- Sandboxed execution environment
+- Resource limits enforcement
+- Input validation
+- Error isolation
+
+### Configuration Options
+
+```yaml
+code_executor:
+  model: "gpt-4"
+  parameters:
+    max_tokens: 2000
+    temperature: 0.7
+    timeout: 60
+    sandbox_mode: true
+    memory_limit: "256MB"
+    cpu_limit: "0.2"
+```
+
+### Usage Example
+
+```python
+# Initialize agent
+agent = CodeExecutorAgent(db=local_db, trading_mode=trading_mode)
+
+# Execute code
+response = agent.execute("""
+    Write a Python function that:
+    1. Calculates RSI
+    2. Handles edge cases
+    3. Includes tests
+""")
+
+# Get results
+print(response)
+```
+
+### Error Handling
+
+The agent implements a multi-layer error handling approach:
+1. Code validation before execution
+2. Runtime error catching
+3. Automatic error recovery
+4. Detailed error reporting
+
+### Database Integration
+
+- Logs all executions
+- Tracks execution status
+- Stores results and errors
+- Maintains execution history
+
+### Monitoring
+
+Monitor the agent through:
+1. Web Dashboard
+2. Log Files
+3. Database Queries
+4. Health Checks
